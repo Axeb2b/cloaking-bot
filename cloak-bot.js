@@ -1,4 +1,4 @@
-// cloak-bot.js – Cloaking bot (working, no template string errors)
+// cloak-bot.js – Final working version (no syntax errors)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const Database = require('better-sqlite3');
@@ -16,6 +16,7 @@ if (!BOT_TOKEN || !GEMINI_API_KEY) {
     process.exit(1);
 }
 
+// Database
 const db = new Database('./cloaks.db');
 db.exec(`CREATE TABLE IF NOT EXISTS campaigns (
     id TEXT PRIMARY KEY,
@@ -97,7 +98,7 @@ async function generateWhitePage(params) {
     }
 }
 
-// generateIndexPHP using array join (safest, no template string issues)
+// generateIndexPHP – build as array then join (safe)
 function generateIndexPHP(campaign) {
     const {
         id, name, offer_url, white_url, clicks_per_ip, clicks_before_filter,
