@@ -1,9 +1,8 @@
-// cloak-bot.js – Full cloaking bot with group stats
+// cloak-bot.js – Cloaking bot (full working)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const Database = require('better-sqlite3');
 const express = require('express');
-const crypto = require('crypto');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PORT = process.env.PORT || 3000;
@@ -33,7 +32,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS campaigns (
     browsers_allowed TEXT,
     get_params TEXT,
     active INTEGER DEFAULT 1,
-    group_id TEXT,               -- Telegram group ID for notifications
+    group_id TEXT,
     user_id INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`);
@@ -56,13 +55,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS stats (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`);
 
-// Helper to escape PHP strings
 function phpEscape(str) {
     if (!str) return '';
     return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-// Generate index.php with detailed tracking
+// Corrected generateIndexPHP using template literals properly
 function generateIndexPHP(campaign) {
     const {
         id, name, offer_url, white_url, clicks_per_ip, clicks_before_filter,
@@ -74,7 +72,7 @@ function generateIndexPHP(campaign) {
     const oss = JSON.parse(os_allowed || '[]');
     const browsers = JSON.parse(browsers_allowed || '[]');
 
-    return `<?php
+    const php = `<?php
 // Cloaking script for: ${phpEscape(name)} (ID: ${id})
 $offer_url = '${phpEscape(offer_url)}';
 $white_url = '${phpEscape(white_url)}';
@@ -116,7 +114,6 @@ function getDeviceOSBrowser($ua) {
     return ['device' => $device, 'os' => $os, 'browser' => $browser];
 }
 
-// Get detailed info from IP
 function getGeoInfo($ip) {
     $data = @file_get_contents("http://ip-api.com/json/{$ip}?fields=status,countryCode,isp,timezone");
     if ($data) {
@@ -155,25 +152,19 @@ file_put_contents($countFile, json_encode($countData));
 
 $isBot = false;
 if ($countData['count'] <= $clicks_before_filter) {
-    $isBot = false; // test mode
+    $isBot = false;
 } else {
-    // Bot detection by user agent
     $bots = ['bot','crawl','spider','headless','curl','wget','python','go-http','scrapy','puppet'];
     foreach ($bots as $b) if (stripos($ua, $b) !== false) { $isBot = true; break; }
-    
-    // Country filter
     if (!$isBot && !empty($countries_allowed)) {
         if (!in_array($country, $countries_allowed)) $isBot = true;
     }
-    // Device filter
     if (!$isBot && !empty($devices_allowed)) {
         if (!in_array($device, $devices_allowed)) $isBot = true;
     }
-    // OS filter
     if (!$isBot && !empty($os_allowed)) {
         if (!in_array($os, $os_allowed)) $isBot = true;
     }
-    // Browser filter
     if (!$isBot && !empty($browsers_allowed)) {
         if (!in_array($browser, $browsers_allowed)) $isBot = true;
     }
@@ -181,7 +172,6 @@ if ($countData['count'] <= $clicks_before_filter) {
 }
 $decision = $isBot ? 'white' : 'main';
 
-// Send detailed stats to bot API
 $postData = [
     'campaign_id' => ${id},
     'ip' => $ip,
@@ -214,28 +204,28 @@ if ($decision === 'main') {
 }
 exit;
 `;
+    return php;
 }
 
-// Express API (updated to send group message)
+// Express API
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-const bot = new Telegraf(BOT_TOKEN); // defined here so we can use in API
+// We'll define bot later after its creation, but need for API. Let's create bot first.
+// However, bot uses API, so we need to forward declare.
+let bot;
 
 app.post('/api/track', (req, res) => {
     const data = req.body;
     const { campaign_id, ip, user_agent, decision, country, isp, timezone, language, referer, domain, device, os, browser, request_method } = data;
     if (!campaign_id) return res.sendStatus(400);
-    // Store in DB
     const stmt = db.prepare(`INSERT INTO stats 
         (campaign_id, ip, user_agent, decision, country, isp, timezone, language, referer, domain, device, os, browser, request_method) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     stmt.run(campaign_id, ip, user_agent, decision, country, isp, timezone, language, referer, domain, device, os, browser, request_method);
-    
-    // Get group_id for this campaign
     const campaign = db.prepare(`SELECT group_id, name FROM campaigns WHERE id = ?`).get(campaign_id);
-    if (campaign && campaign.group_id) {
+    if (campaign && campaign.group_id && bot) {
         const groupId = campaign.group_id;
         const message = `🔔 *New Click* (${decision === 'main' ? '✅ Main' : '⚪ White'})
 *Campaign:* ${campaign.name} (ID: ${campaign_id})
@@ -257,7 +247,9 @@ app.post('/api/track', (req, res) => {
     res.sendStatus(200);
 });
 
-// Telegram Bot Commands (including group_id in /new flow)
+// Telegram Bot
+const Telegraf = require('telegraf').Telegraf;
+bot = new Telegraf(BOT_TOKEN);
 const userSession = new Map();
 
 function getSession(userId) {
@@ -298,7 +290,7 @@ bot.command('cancel', (ctx) => {
     }
 });
 
-// Conversation handler (detailed steps including group_id)
+// Conversation handler
 bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
     const session = getSession(userId);
@@ -385,7 +377,6 @@ bot.on('text', async (ctx) => {
         }
         else if (session.step === 'active') {
             session.active = (text.toLowerCase() === 'yes') ? 1 : 0;
-            // Save to database
             const userIdNum = ctx.from.id;
             const stmt = db.prepare(`INSERT INTO campaigns 
                 (name, offer_url, white_url, clicks_per_ip, clicks_before_filter, block_vpn, block_ipv6, block_no_isp, block_no_referrer,
