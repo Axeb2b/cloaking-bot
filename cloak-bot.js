@@ -1,4 +1,4 @@
-// cloak-bot.js – Cloaking bot (fixed template string issue)
+// cloak-bot.js – Fully working cloaking bot (download fixed)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const Database = require('better-sqlite3');
@@ -74,7 +74,7 @@ function phpEscape(str) {
     return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-// ---------- GENERATE index.php (no template literals, safe) ----------
+// ---------- GENERATE index.php (safe, no template literals) ----------
 function generateIndexPHP(campaign) {
     const {
         id, name, offer_url, white_url, clicks_per_ip, clicks_before_filter,
@@ -433,15 +433,24 @@ bot.command('download', async (ctx) => {
     const userId = ctx.from.id;
     try {
         const row = db.prepare(`SELECT * FROM campaigns WHERE id = ? AND user_id = ?`).get(id, userId);
-        if (!row) return ctx.reply('Campaign not found.');
+        if (!row) {
+            console.log(`Campaign ${id} not found for user ${userId}`);
+            return ctx.reply('Campaign not found.');
+        }
+        console.log(`Generating PHP for campaign: ${row.name} (ID: ${id})`);
         const phpCode = generateIndexPHP(row);
+        if (!phpCode || phpCode.length < 500) {
+            console.error('Generated PHP too short:', phpCode);
+            return ctx.reply('Error generating PHP file.');
+        }
         await ctx.replyWithDocument({
             source: Buffer.from(phpCode, 'utf8'),
             filename: `cloak_${id}.php`
-        }, { caption: `index.php for ${row.name}` });
+        }, { caption: `index.php for campaign ${row.name} (ID: ${id})` });
+        console.log(`File sent for campaign ${id}`);
     } catch (err) {
         console.error('Download error:', err);
-        ctx.reply('❌ Failed to generate file. Check logs.');
+        ctx.reply('❌ Failed to generate file. Check bot logs.');
     }
 });
 
