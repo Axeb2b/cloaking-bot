@@ -1,4 +1,5 @@
-// server.js – Full Cloaking SaaS with Advanced Detection + Fixed Download
+// server.js – Professional Cloaking Bot
+// Features: OS/browser/country filters, daily clicks limit, VPN block, white page (URL or AI multi-file), detailed stats, all bot commands
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
@@ -9,6 +10,8 @@ const axios = require('axios');
 const { Telegraf, Markup } = require('telegraf');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
+const archiver = require('archiver');
 
 // ---------- Database Setup ----------
 const db = new sqlite3.Database(path.join(__dirname, 'cloaking.db'));
@@ -28,14 +31,14 @@ db.serialize(() => {
         user_id INTEGER,
         name TEXT,
         offer_url TEXT,
-        white_niche TEXT,
-        white_html TEXT,
-        clicks_per_ip INTEGER DEFAULT 15,
-        clicks_per_day INTEGER DEFAULT 5,
+        white_type TEXT DEFAULT 'ai',
+        white_value TEXT,
+        white_zip TEXT,
+        allowed_os TEXT,
+        allowed_browsers TEXT,
+        allowed_countries TEXT,
+        clicks_per_day INTEGER DEFAULT 15,
         block_vpn INTEGER DEFAULT 0,
-        block_ipv6 INTEGER DEFAULT 0,
-        block_no_isp INTEGER DEFAULT 0,
-        block_no_referrer INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id)
     )`);
@@ -70,51 +73,66 @@ app.use(express.urlencoded({ extended: true }));
 app.use(session({ secret: process.env.SESSION_SECRET || 'default', resave: false, saveUninitialized: false }));
 app.use(express.static('public'));
 
-// ---------- Helper: AI White Page ----------
-async function generateWhitePage(niche) {
-    const prompt = `Generate a complete, modern, legitimate-looking HTML/CSS landing page for the niche: "${niche}". Return only the HTML code (including <html>, <head>, <body>). Use inline CSS. Make it look professional with a call to action, fake testimonials, and a convincing design.`;
+// ---------- Helper: AI White Page – generates multi-file zip ----------
+async function generateWhitePageHTML(niche) {
+    const prompt = `Generate a complete, modern, legitimate-looking multi-page website HTML for the niche: "${niche}". Include inline CSS for a professional look. Add a header, main content, call-to-action button, and footer. Make it look like a real business site. Return ONLY the HTML code (starting with <!DOCTYPE html>).`;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
     try {
-        const response = await axios.post(url, {
-            contents: [{ parts: [{ text: prompt }] }]
-        });
+        const response = await axios.post(url, { contents: [{ parts: [{ text: prompt }] }] });
         let html = response.data.candidates[0].content.parts[0].text;
         html = html.replace(/```html/g, '').replace(/```/g, '');
         return html;
     } catch (err) {
         console.error('AI error:', err.message);
-        return '<html><body><h1>White Page</h1><p>AI unavailable, using fallback.</p></body></html>';
+        return `<!DOCTYPE html><html><head><title>${niche}</title><style>body{font-family:Arial;text-align:center;padding:50px}</style></head><body><h1>${niche}</h1><p>Your white page</p></body></html>`;
     }
 }
 
-// ---------- Helper: Generate index.php (Advanced Detection) ----------
-function generateIndexPHP(campaign) {
-    const { id, offer_url, white_html, clicks_per_ip, clicks_per_day,
-            block_vpn, block_ipv6, block_no_isp, block_no_referrer } = campaign;
+async function generateMultiFileWhitePage(niche) {
+    const html = await generateWhitePageHTML(niche);
+    const tempDir = path.join(__dirname, 'temp', crypto.randomUUID());
+    fs.mkdirSync(tempDir, { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'index.html'), html);
+    // Additional files to look legit
+    fs.writeFileSync(path.join(tempDir, 'style.css'), `body { font-family: Arial; margin: 0; padding: 20px; background: #f5f5f5; } .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; } .button { background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; }`);
+    fs.writeFileSync(path.join(tempDir, 'script.js'), `console.log("White page loaded"); document.addEventListener('DOMContentLoaded', function() { document.querySelector('.button')?.addEventListener('click', function(e) { e.preventDefault(); alert('Demo'); }); });`);
+    const imgBase64 = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    fs.writeFileSync(path.join(tempDir, 'pixel.gif'), Buffer.from(imgBase64, 'base64'));
+    fs.writeFileSync(path.join(tempDir, 'about.html'), '<html><body><h1>About Us</h1><p>This is a demo site.</p><a href="index.html">Home</a></body></html>');
+    fs.writeFileSync(path.join(tempDir, 'contact.html'), '<html><body><h1>Contact</h1><p>Email: demo@example.com</p><a href="index.html">Home</a></body></html>');
     
-    // Escape for PHP string
-    const escapedHtml = white_html.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const zipPath = path.join(__dirname, 'white_zips', `${crypto.randomUUID()}.zip`);
+    fs.mkdirSync(path.dirname(zipPath), { recursive: true });
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(output);
+    archive.directory(tempDir, false);
+    await archive.finalize();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    return zipPath;
+}
+
+// ---------- Helper: Generate index.php (Full cloaking script) ----------
+function generateIndexPHP(campaign) {
+    const { id, offer_url, white_type, white_value, white_zip, allowed_os, allowed_browsers, allowed_countries, clicks_per_day, block_vpn } = campaign;
+    const allowedOsArray = allowed_os ? allowed_os.split(',').map(s => s.trim()) : [];
+    const allowedBrowsersArray = allowed_browsers ? allowed_browsers.split(',').map(s => s.trim()) : [];
+    const allowedCountriesArray = allowed_countries ? allowed_countries.split(',').map(s => s.trim().toUpperCase()) : [];
     
     return `<?php
-// ========== ADVANCED CLOAKING SCRIPT ==========
-// Campaign ID: ${id}
-// Offer URL: ${offer_url}
-// Rate limits: ${clicks_per_ip || 15} clicks per IP (lifetime), ${clicks_per_day || 5} per day
-
-$api_url = "https://${process.env.DOMAIN || 'yourdomain.com'}/api/track";
+// Professional Cloaking Script – Campaign: ${id}
+$api_url = "https://${process.env.DOMAIN}/api/track";
 $campaign_id = "${id}";
 $offer_url = "${offer_url}";
-$clicks_per_ip_limit = ${clicks_per_ip ?? 15};
-$clicks_per_day_limit = ${clicks_per_day ?? 5};
+$white_type = "${white_type}";
+$white_value = str_replace("'", "\\'", "${white_value}");
+$white_zip = "${white_zip || ''}";
+$clicks_per_day_limit = ${clicks_per_day ?? 15};
 $block_vpn = ${block_vpn ? 1 : 0};
-$block_ipv6 = ${block_ipv6 ? 1 : 0};
-$block_no_isp = ${block_no_isp ? 1 : 0};
-$block_no_referrer = ${block_no_referrer ? 1 : 0};
+$allowed_os = ["${allowedOsArray.join('","')}"];
+$allowed_browsers = ["${allowedBrowsersArray.join('","')}"];
+$allowed_countries = ["${allowedCountriesArray.join('","')}"];
 
-// White page HTML
-$white_html = '${escapedHtml}';
-
-// ---------- Helper Functions ----------
 function getUserIP() {
     if (!empty($_SERVER['HTTP_CLIENT_IP'])) return $_SERVER['HTTP_CLIENT_IP'];
     if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) return $_SERVER['HTTP_X_FORWARDED_FOR'];
@@ -122,7 +140,7 @@ function getUserIP() {
 }
 
 function getISPandLocation($ip) {
-    $url = "http://ip-api.com/json/{$ip}?fields=status,country,regionName,city,isp,proxy";
+    $url = "http://ip-api.com/json/{$ip}?fields=status,country,isp,proxy";
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -131,99 +149,70 @@ function getISPandLocation($ip) {
     curl_close($ch);
     if ($response) {
         $data = json_decode($response, true);
-        if ($data && $data['status'] == 'success') {
-            return [
-                'country' => $data['country'],
-                'region' => $data['regionName'],
-                'city' => $data['city'],
-                'isp' => $data['isp'],
-                'is_proxy' => $data['proxy'] ?? false
-            ];
-        }
+        if ($data && $data['status'] == 'success') return $data;
     }
-    return ['country' => 'Unknown', 'isp' => 'Unknown', 'is_proxy' => false];
+    return ['country' => 'Unknown', 'isp' => 'Unknown', 'proxy' => false];
 }
 
-function getDeviceInfo($user_agent) {
-    $device = 'Unknown';
-    $os = 'Unknown';
-    $browser = 'Unknown';
-    if (preg_match('/iPhone|iPad|iPod/i', $user_agent)) $device = 'iOS';
-    elseif (preg_match('/Android/i', $user_agent)) $device = 'Android';
-    elseif (preg_match('/Windows Phone/i', $user_agent)) $device = 'Windows Phone';
-    elseif (preg_match('/Windows/i', $user_agent)) $device = 'Windows';
-    elseif (preg_match('/Mac/i', $user_agent)) $device = 'Mac';
-    elseif (preg_match('/Linux/i', $user_agent)) $device = 'Linux';
+function getDeviceInfo($ua) {
+    $device = 'Unknown'; $os = 'Unknown'; $browser = 'Unknown';
+    if (preg_match('/iPhone|iPad|iPod/i', $ua)) $device = 'iOS';
+    elseif (preg_match('/Android/i', $ua)) $device = 'Android';
+    elseif (preg_match('/Windows Phone/i', $ua)) $device = 'Windows Phone';
+    elseif (preg_match('/Windows/i', $ua)) $device = 'Windows';
+    elseif (preg_match('/Mac/i', $ua)) $device = 'Mac';
+    elseif (preg_match('/Linux/i', $ua)) $device = 'Linux';
     
-    if (preg_match('/Windows NT 10.0/i', $user_agent)) $os = 'Windows 10';
-    elseif (preg_match('/Windows NT 6.1/i', $user_agent)) $os = 'Windows 7';
-    elseif (preg_match('/Mac OS X (\\d+[._]\\d+)/i', $user_agent, $m)) $os = 'macOS ' . str_replace('_', '.', $m[1]);
-    elseif (preg_match('/Android (\\d+\\.\\d+)/i', $user_agent, $m)) $os = 'Android ' . $m[1];
-    elseif (preg_match('/iPhone OS (\\d+[._]\\d+)/i', $user_agent, $m)) $os = 'iOS ' . str_replace('_', '.', $m[1]);
+    if (preg_match('/Windows NT 10.0/i', $ua)) $os = 'Windows 10';
+    elseif (preg_match('/Mac OS X/i', $ua)) $os = 'macOS';
+    elseif (preg_match('/Android/i', $ua)) $os = 'Android';
+    elseif (preg_match('/iPhone OS/i', $ua)) $os = 'iOS';
     
-    if (preg_match('/Edg/i', $user_agent)) $browser = 'Edge';
-    elseif (preg_match('/Chrome/i', $user_agent)) $browser = 'Chrome';
-    elseif (preg_match('/Firefox/i', $user_agent)) $browser = 'Firefox';
-    elseif (preg_match('/Safari/i', $user_agent)) $browser = 'Safari';
-    elseif (preg_match('/Opera/i', $user_agent)) $browser = 'Opera';
-    
+    if (preg_match('/Edg/i', $ua)) $browser = 'Edge';
+    elseif (preg_match('/Chrome/i', $ua)) $browser = 'Chrome';
+    elseif (preg_match('/Firefox/i', $ua)) $browser = 'Firefox';
+    elseif (preg_match('/Safari/i', $ua)) $browser = 'Safari';
+    elseif (preg_match('/Opera/i', $ua)) $browser = 'Opera';
     return ['device' => $device, 'os' => $os, 'browser' => $browser];
 }
 
-function getClickCount($ip, $campaign_id) {
-    $data_file = sys_get_temp_dir() . "/cloak_{$campaign_id}_{$ip}.json";
-    if (file_exists($data_file)) {
-        $data = json_decode(file_get_contents($data_file), true);
-        if ($data) return $data;
+function getTodayClicks($ip, $campaign_id) {
+    $file = sys_get_temp_dir() . "/cloak_{$campaign_id}_{$ip}.json";
+    if (file_exists($file)) {
+        $data = json_decode(file_get_contents($file), true);
+        if ($data && $data['date'] == date('Y-m-d')) return $data['count'];
     }
-    return ['total' => 0, 'today' => 0, 'last_date' => date('Y-m-d')];
+    return 0;
 }
 
-function updateClickCount($ip, $campaign_id) {
-    $data = getClickCount($ip, $campaign_id);
-    $today = date('Y-m-d');
-    if ($data['last_date'] != $today) {
-        $data['today'] = 0;
-        $data['last_date'] = $today;
-    }
-    $data['total']++;
-    $data['today']++;
-    file_put_contents(sys_get_temp_dir() . "/cloak_{$campaign_id}_{$ip}.json", json_encode($data));
-    return $data;
+function incrementTodayClicks($ip, $campaign_id) {
+    $file = sys_get_temp_dir() . "/cloak_{$campaign_id}_{$ip}.json";
+    $count = getTodayClicks($ip, $campaign_id);
+    $count++;
+    file_put_contents($file, json_encode(['date' => date('Y-m-d'), 'count' => $count]));
 }
 
-// ---------- Main Detection Logic ----------
 $ip = getUserIP();
-$user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+$ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
 $referrer = $_SERVER['HTTP_REFERER'] ?? '';
 
 $ip_info = getISPandLocation($ip);
-$device_info = getDeviceInfo($user_agent);
-
-$click_data = getClickCount($ip, $campaign_id);
-$exceeded_total = $click_data['total'] >= $clicks_per_ip_limit;
-$exceeded_today = $click_data['today'] >= $clicks_per_day_limit;
-
-$is_vpn = $ip_info['is_proxy'] || ($block_vpn && strpos(strtolower($ip_info['isp']), 'vpn') !== false);
-$is_ipv6 = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
-$has_isp = ($ip_info['isp'] != 'Unknown');
-$has_referrer = !empty($referrer);
+$device_info = getDeviceInfo($ua);
+$today_clicks = getTodayClicks($ip, $campaign_id);
 
 $show_offer = true;
-if ($exceeded_total || $exceeded_today) $show_offer = false;
-if ($block_vpn && $is_vpn) $show_offer = false;
-if ($block_ipv6 && $is_ipv6) $show_offer = false;
-if ($block_no_isp && !$has_isp) $show_offer = false;
-if ($block_no_referrer && !$has_referrer) $show_offer = false;
+if ($today_clicks >= $clicks_per_day_limit) $show_offer = false;
+if ($block_vpn && ($ip_info['proxy'] || stripos($ip_info['isp'], 'vpn') !== false)) $show_offer = false;
+if (!empty($allowed_os) && !in_array($device_info['os'], $allowed_os)) $show_offer = false;
+if (!empty($allowed_browsers) && !in_array($device_info['browser'], $allowed_browsers)) $show_offer = false;
+if (!empty($allowed_countries) && !in_array($ip_info['country'], $allowed_countries)) $show_offer = false;
 
-if ($show_offer) {
-    updateClickCount($ip, $campaign_id);
-}
+if ($show_offer) incrementTodayClicks($ip, $campaign_id);
 
 $track_data = [
     'campaign_id' => $campaign_id,
     'ip' => $ip,
-    'user_agent' => $user_agent,
+    'user_agent' => $ua,
     'decision' => $show_offer ? 'main' : 'white',
     'country' => $ip_info['country'],
     'isp' => $ip_info['isp'],
@@ -233,7 +222,6 @@ $track_data = [
     'referrer' => $referrer
 ];
 $ch = curl_init($api_url);
-curl_setopt($ch, CURLOPT_URL, $api_url);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($track_data));
 curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
@@ -246,7 +234,39 @@ if ($show_offer) {
     header("Location: $offer_url");
     exit;
 } else {
-    echo $white_html;
+    if ($white_type == 'url') {
+        header("Location: $white_value");
+        exit;
+    } else {
+        if ($white_zip && file_exists($white_zip)) {
+            $zip = new ZipArchive();
+            if ($zip->open($white_zip) === TRUE) {
+                $uri = $_SERVER['REQUEST_URI'];
+                if ($uri == '/' || $uri == '/index.html') {
+                    header('Content-Type: text/html');
+                    echo $zip->getFromName('index.html');
+                } elseif ($uri == '/style.css') {
+                    header('Content-Type: text/css');
+                    echo $zip->getFromName('style.css');
+                } elseif ($uri == '/script.js') {
+                    header('Content-Type: application/javascript');
+                    echo $zip->getFromName('script.js');
+                } elseif ($uri == '/about.html') {
+                    echo $zip->getFromName('about.html');
+                } elseif ($uri == '/contact.html') {
+                    echo $zip->getFromName('contact.html');
+                } elseif ($uri == '/pixel.gif') {
+                    header('Content-Type: image/gif');
+                    echo $zip->getFromName('pixel.gif');
+                } else {
+                    echo $zip->getFromName('index.html');
+                }
+                $zip->close();
+                exit;
+            }
+        }
+        echo $white_value;
+    }
 }
 ?>`;
 }
@@ -280,9 +300,7 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', (req, res) => {
     const { email, password } = req.body;
     db.get(`SELECT * FROM users WHERE email = ?`, [email], async (err, user) => {
-        if (!user || !(await bcrypt.compare(password, user.password))) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
+        if (!user || !(await bcrypt.compare(password, user.password))) return res.status(401).json({ error: 'Invalid' });
         const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET || 'default');
         req.session.userId = user.id;
         res.json({ token, user: { id: user.id, email: user.email, telegram_id: user.telegram_id } });
@@ -290,21 +308,25 @@ app.post('/api/login', (req, res) => {
 });
 
 app.post('/api/campaigns', auth, async (req, res) => {
-    const { name, offer_url, white_niche, clicks_per_ip, clicks_per_day, block_vpn, block_ipv6, block_no_isp, block_no_referrer } = req.body;
-    if (!name || !offer_url || !white_niche) return res.status(400).json({ error: 'Missing fields' });
+    const { name, offer_url, white_type, white_value, allowed_os, allowed_browsers, allowed_countries, clicks_per_day, block_vpn } = req.body;
+    if (!name || !offer_url) return res.status(400).json({ error: 'Missing name/offer' });
     const id = crypto.randomUUID();
-    const whiteHtml = await generateWhitePage(white_niche);
-    db.run(`INSERT INTO campaigns (id, user_id, name, offer_url, white_niche, white_html, clicks_per_ip, clicks_per_day, block_vpn, block_ipv6, block_no_isp, block_no_referrer)
+    let whiteZip = null;
+    let finalWhiteValue = white_value;
+    if (white_type === 'ai') {
+        whiteZip = await generateMultiFileWhitePage(white_value);
+        finalWhiteValue = ''; // stored separately
+    }
+    db.run(`INSERT INTO campaigns (id, user_id, name, offer_url, white_type, white_value, white_zip, allowed_os, allowed_browsers, allowed_countries, clicks_per_day, block_vpn)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, req.userId, name, offer_url, white_niche, whiteHtml, clicks_per_ip || 15, clicks_per_day || 5,
-             block_vpn ? 1 : 0, block_ipv6 ? 1 : 0, block_no_isp ? 1 : 0, block_no_referrer ? 1 : 0], (err) => {
+            [id, req.userId, name, offer_url, white_type, finalWhiteValue, whiteZip, allowed_os || null, allowed_browsers || null, allowed_countries || null, clicks_per_day || 15, block_vpn ? 1 : 0], (err) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ success: true, id });
     });
 });
 
 app.get('/api/campaigns', auth, (req, res) => {
-    db.all(`SELECT id, name, offer_url, white_niche, created_at FROM campaigns WHERE user_id = ?`, [req.userId], (err, rows) => {
+    db.all(`SELECT id, name, offer_url, white_type, created_at FROM campaigns WHERE user_id = ?`, [req.userId], (err, rows) => {
         res.json(rows || []);
     });
 });
@@ -313,6 +335,22 @@ app.get('/api/campaigns/:id/stats', auth, (req, res) => {
     const campaignId = req.params.id;
     db.get(`SELECT COUNT(CASE WHEN decision='main' THEN 1 END) as main, COUNT(CASE WHEN decision='white' THEN 1 END) as white FROM stats WHERE campaign_id = ?`, [campaignId], (err, row) => {
         res.json(row || { main: 0, white: 0 });
+    });
+});
+
+app.get('/api/campaigns/:id/detailed_stats', auth, (req, res) => {
+    const campaignId = req.params.id;
+    db.all(`SELECT decision, country, device, os, browser FROM stats WHERE campaign_id = ?`, [campaignId], (err, rows) => {
+        if (err) return res.json({ error: err.message });
+        const stats = { main: 0, white: 0, by_country: {}, by_device: {}, by_os: {}, by_browser: {} };
+        rows.forEach(row => {
+            if (row.decision === 'main') stats.main++; else stats.white++;
+            if (row.country) stats.by_country[row.country] = (stats.by_country[row.country] || 0) + 1;
+            if (row.device) stats.by_device[row.device] = (stats.by_device[row.device] || 0) + 1;
+            if (row.os) stats.by_os[row.os] = (stats.by_os[row.os] || 0) + 1;
+            if (row.browser) stats.by_browser[row.browser] = (stats.by_browser[row.browser] || 0) + 1;
+        });
+        res.json(stats);
     });
 });
 
@@ -369,52 +407,59 @@ async function createUser(email, password, telegramId) {
     });
 }
 
-// Command: /download <campaign_id>
+// Command: /download <id>
 bot.command('download', async (ctx) => {
     const args = ctx.message.text.split(' ');
-    if (args.length < 2) {
-        return ctx.reply('Usage: /download <campaign_id>\n\nExample: /download b103f26f-3918-4fd3-9b59-ba34b8f366f0');
-    }
+    if (args.length < 2) return ctx.reply('Usage: /download <campaign_id>');
     const campaignId = args[1];
-    const telegramId = ctx.from.id;
-    const userId = await getUserIdByTelegram(telegramId);
-    if (!userId) return ctx.reply('❌ Your Telegram is not linked. Use /start to register/link.');
-    
+    const userId = await getUserIdByTelegram(ctx.from.id);
+    if (!userId) return ctx.reply('❌ Not linked. /start');
     db.get(`SELECT * FROM campaigns WHERE id = ? AND user_id = ?`, [campaignId, userId], (err, campaign) => {
-        if (err || !campaign) return ctx.reply('❌ Campaign not found or you don\'t own it.');
+        if (!campaign) return ctx.reply('❌ Campaign not found.');
         const phpCode = generateIndexPHP(campaign);
         const buffer = Buffer.from(phpCode, 'utf-8');
         ctx.replyWithDocument({ source: buffer, filename: `cloak_${campaignId}.php` });
     });
 });
 
-// Start command
+// Command: /detailed_stats
+bot.command('detailed_stats', async (ctx) => {
+    const userId = await getUserIdByTelegram(ctx.from.id);
+    if (!userId) return ctx.reply('Not linked.');
+    db.all(`SELECT id, name FROM campaigns WHERE user_id = ?`, [userId], (err, rows) => {
+        if (!rows.length) return ctx.reply('No campaigns.');
+        const buttons = rows.map(c => [Markup.button.callback(c.name, `dstats_${c.id}`)]);
+        ctx.reply('Select campaign for detailed stats:', Markup.inlineKeyboard(buttons));
+    });
+});
+
+// Start command with professional menu
 bot.start(async (ctx) => {
-    const telegramId = ctx.from.id;
-    const userId = await getUserIdByTelegram(telegramId);
+    const userId = await getUserIdByTelegram(ctx.from.id);
     if (!userId) {
-        await ctx.reply(
-            '🔐 *Welcome to Cloaking Bot*\n\nYou need an account to continue.\nChoose an option:',
-            {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard([
-                    [Markup.button.callback('📝 Register New Account', 'register_new')],
-                    [Markup.button.callback('🔗 Link Existing Account', 'link_existing')]
-                ])
-            }
+        await ctx.replyWithMarkdown(
+            "🎯 *Professional Cloaking Bot*\n\nWelcome! Please register or link your account.",
+            Markup.inlineKeyboard([
+                [Markup.button.callback('📝 Register', 'reg_new')],
+                [Markup.button.callback('🔗 Link Account', 'link_existing')]
+            ])
         );
     } else {
-        await ctx.reply(`Welcome back! Use buttons below:`, Markup.inlineKeyboard([
-            [Markup.button.callback('📋 My Campaigns', 'list_campaigns')],
-            [Markup.button.callback('➕ New Campaign', 'new_campaign')],
-            [Markup.button.callback('📊 Stats', 'stats_menu')],
-            [Markup.button.callback('⬇️ Download Script', 'download_menu')]
-        ]));
+        await ctx.replyWithMarkdown(
+            "🎯 *Main Menu*",
+            Markup.inlineKeyboard([
+                [Markup.button.callback('📋 My Campaigns', 'list_campaigns')],
+                [Markup.button.callback('➕ New Campaign', 'new_campaign')],
+                [Markup.button.callback('📊 Quick Stats', 'stats_menu')],
+                [Markup.button.callback('📈 Detailed Stats', 'detailed_stats_menu')],
+                [Markup.button.callback('⬇️ Download Script', 'download_menu')]
+            ])
+        );
     }
 });
 
-// Register and link actions
-bot.action('register_new', async (ctx) => {
+// Registration & linking actions
+bot.action('reg_new', async (ctx) => {
     await ctx.answerCbQuery();
     setTempSession(ctx.from.id, 'reg_email', {});
     await ctx.reply('📧 Send your email address:');
@@ -422,144 +467,258 @@ bot.action('register_new', async (ctx) => {
 bot.action('link_existing', async (ctx) => {
     await ctx.answerCbQuery();
     setTempSession(ctx.from.id, 'link_email', {});
-    await ctx.reply('🔗 Send the email address of your existing account:');
+    await ctx.reply('🔗 Send your registered email:');
 });
 
-// Text handler for registration/linking and campaign creation
+// New campaign action – start the 8-step process
+bot.action('new_campaign', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = await getUserIdByTelegram(ctx.from.id);
+    if (!userId) return ctx.reply('❌ Not linked. /start');
+    setTempSession(ctx.from.id, 'campaign_name', {});
+    await ctx.reply("📌 *Step 1/8:* Send a name for your campaign.\nExample: `My Campaign`", { parse_mode: 'Markdown' });
+});
+
+// Action handlers for white type
+bot.action('white_ai', async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = await getTempSession(ctx.from.id);
+    if (session && session.step === 'white_type') {
+        session.data.white_type = 'ai';
+        setTempSession(ctx.from.id, 'white_niche', session.data);
+        await ctx.reply("🧠 *Step 3b:* Send a niche for AI white page.\nExample: `iPhone 15 Giveaway`", { parse_mode: 'Markdown' });
+    }
+});
+bot.action('white_url', async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = await getTempSession(ctx.from.id);
+    if (session && session.step === 'white_type') {
+        session.data.white_type = 'url';
+        setTempSession(ctx.from.id, 'white_url', session.data);
+        await ctx.reply("🔗 *Step 3b:* Send the full URL of your white page.\nExample: `https://example.com/white`", { parse_mode: 'Markdown' });
+    }
+});
+
+// VPN block actions
+bot.action('block_vpn_yes', async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = await getTempSession(ctx.from.id);
+    if (session && session.step === 'block_vpn') {
+        session.data.block_vpn = true;
+        await finishCampaignCreation(ctx, session.data);
+    }
+});
+bot.action('block_vpn_no', async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = await getTempSession(ctx.from.id);
+    if (session && session.step === 'block_vpn') {
+        session.data.block_vpn = false;
+        await finishCampaignCreation(ctx, session.data);
+    }
+});
+
+// Text handler for all steps
 bot.on('text', async (ctx) => {
     const telegramId = ctx.from.id;
-    const sessionData = await getTempSession(telegramId);
+    const session = await getTempSession(telegramId);
     const text = ctx.message.text.trim();
+    if (!session.step) return;
 
     // Registration steps
-    if (sessionData.step === 'reg_email') {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(text)) return ctx.reply('❌ Invalid email. Send again:');
-        sessionData.data.email = text;
-        setTempSession(telegramId, 'reg_password', sessionData.data);
-        return ctx.reply('🔒 Send a password (min 6 characters):');
+    if (session.step === 'reg_email') {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) return ctx.reply('❌ Invalid email. Try again.');
+        session.data.email = text;
+        setTempSession(telegramId, 'reg_password', session.data);
+        return ctx.reply('🔒 Send a password (min 6 chars):');
     }
-    if (sessionData.step === 'reg_password') {
-        if (text.length < 6) return ctx.reply('❌ Password must be at least 6 characters. Send again:');
-        sessionData.data.password = text;
-        setTempSession(telegramId, 'reg_confirm', sessionData.data);
-        return ctx.reply('🔁 Confirm password (type again):');
+    if (session.step === 'reg_password') {
+        if (text.length < 6) return ctx.reply('❌ Min 6 chars.');
+        session.data.password = text;
+        setTempSession(telegramId, 'reg_confirm', session.data);
+        return ctx.reply('🔁 Confirm password:');
     }
-    if (sessionData.step === 'reg_confirm') {
-        if (text !== sessionData.data.password) return ctx.reply('❌ Passwords do not match. Start over with /start');
+    if (session.step === 'reg_confirm') {
+        if (text !== session.data.password) return ctx.reply('❌ Passwords do not match. Start over with /start');
         try {
-            await createUser(sessionData.data.email, sessionData.data.password, telegramId);
-            await ctx.reply('✅ Registration successful! You can now use the bot.\nPress /start to continue.');
+            await createUser(session.data.email, session.data.password, telegramId);
+            await ctx.reply('✅ Registration successful! Press /start to continue.');
             clearTempSession(telegramId);
         } catch (err) {
-            if (err.message.includes('UNIQUE')) {
-                ctx.reply('❌ Email already registered. Use /start and choose "Link Existing Account" or a different email.');
-            } else {
-                ctx.reply('❌ Error creating account. Try again later.');
-            }
+            ctx.reply('❌ Email already exists. Use /start → Link Account');
             clearTempSession(telegramId);
         }
         return;
     }
     // Link existing account
-    if (sessionData.step === 'link_email') {
-        const email = text;
-        db.get(`SELECT id FROM users WHERE email = ?`, [email], async (err, user) => {
-            if (!user) {
-                await ctx.reply('❌ No account found with that email. Register first using /start');
-                clearTempSession(telegramId);
-                return;
-            }
+    if (session.step === 'link_email') {
+        db.get(`SELECT id FROM users WHERE email = ?`, [text], async (err, user) => {
+            if (!user) return ctx.reply('❌ No account. Register first.');
             db.run(`UPDATE users SET telegram_id = ? WHERE id = ?`, [telegramId, user.id], (err) => {
-                if (err) ctx.reply('Error linking. Try again.');
-                else {
-                    ctx.reply('✅ Account linked! Now use /start');
-                    clearTempSession(telegramId);
-                }
+                if (err) ctx.reply('Error linking.');
+                else ctx.reply('✅ Linked! Use /start');
+                clearTempSession(telegramId);
             });
         });
         return;
     }
-    // New campaign conversation
-    if (sessionData.step === 'new_campaign_name') {
-        sessionData.data.name = text;
-        setTempSession(telegramId, 'new_campaign_offer', sessionData.data);
-        return ctx.reply('Send offer URL (where real visitors go):');
+    // Campaign creation steps
+    if (session.step === 'campaign_name') {
+        session.data.name = text;
+        setTempSession(telegramId, 'offer_url', session.data);
+        return ctx.reply("🔗 *Step 2/8:* Send the offer URL (where real visitors go).\nExample: `https://your-offer.com`", { parse_mode: 'Markdown' });
     }
-    if (sessionData.step === 'new_campaign_offer') {
-        sessionData.data.offer_url = text;
-        setTempSession(telegramId, 'new_campaign_niche', sessionData.data);
-        return ctx.reply('Send niche for AI white page (e.g., "iPhone 15 giveaway"):');
+    if (session.step === 'offer_url') {
+        if (!text.startsWith('http')) return ctx.reply('❌ Valid URL starting with http:// or https://');
+        session.data.offer_url = text;
+        setTempSession(telegramId, 'white_type', session.data);
+        return ctx.replyWithMarkdown("🎨 *Step 3/8:* White page source?\n\nChoose:", Markup.inlineKeyboard([
+            [Markup.button.callback('🤖 AI Generate (multi-file)', 'white_ai')],
+            [Markup.button.callback('🌐 External URL', 'white_url')]
+        ]));
     }
-    if (sessionData.step === 'new_campaign_niche') {
-        sessionData.data.white_niche = text;
-        const userId = await getUserIdByTelegram(telegramId);
-        if (!userId) return ctx.reply('Not linked. Please /start');
-        await ctx.reply('Generating white page with AI... ⏳');
-        const whiteHtml = await generateWhitePage(sessionData.data.white_niche);
-        const campaignId = crypto.randomUUID();
-        db.run(`INSERT INTO campaigns (id, user_id, name, offer_url, white_niche, white_html)
-                VALUES (?, ?, ?, ?, ?, ?)`,
-                [campaignId, userId, sessionData.data.name, sessionData.data.offer_url, sessionData.data.white_niche, whiteHtml], async (err) => {
-            if (err) {
-                await ctx.reply('Error creating campaign.');
-            } else {
-                await ctx.reply(`✅ Campaign created!\n\nName: ${sessionData.data.name}\nID: ${campaignId}\nUse /download ${campaignId} to get index.php`);
-            }
-            clearTempSession(telegramId);
-        });
-        return;
+    if (session.step === 'white_url') {
+        if (!text.startsWith('http')) return ctx.reply('❌ Valid URL');
+        session.data.white_value = text;
+        setTempSession(telegramId, 'allowed_os', session.data);
+        return ctx.replyWithMarkdown("💻 *Step 4/8:* Allowed OS (comma).\nExample: `Windows, macOS, Android`\nOr send `skip` for all.");
+    }
+    if (session.step === 'white_niche') {
+        session.data.white_value = text;
+        setTempSession(telegramId, 'allowed_os', session.data);
+        return ctx.replyWithMarkdown("💻 *Step 4/8:* Allowed OS (comma).\nExample: `Windows, macOS, Android`\nOr `skip`.");
+    }
+    if (session.step === 'allowed_os') {
+        session.data.allowed_os = text.toLowerCase() === 'skip' ? '' : text;
+        setTempSession(telegramId, 'allowed_browsers', session.data);
+        return ctx.replyWithMarkdown("🌐 *Step 5/8:* Allowed browsers (comma).\nExample: `Chrome, Firefox, Safari`\nOr `skip`.");
+    }
+    if (session.step === 'allowed_browsers') {
+        session.data.allowed_browsers = text.toLowerCase() === 'skip' ? '' : text;
+        setTempSession(telegramId, 'allowed_countries', session.data);
+        return ctx.replyWithMarkdown("🌍 *Step 6/8:* Allowed countries (2-letter codes, comma).\nExample: `US, GB, CA`\nOr `skip`.");
+    }
+    if (session.step === 'allowed_countries') {
+        session.data.allowed_countries = text.toLowerCase() === 'skip' ? '' : text.toUpperCase();
+        setTempSession(telegramId, 'clicks_per_day', session.data);
+        return ctx.reply("🔢 *Step 7/8:* Max clicks per IP per day? (default 15)\nSend a number or `skip`.", { parse_mode: 'Markdown' });
+    }
+    if (session.step === 'clicks_per_day') {
+        let clicks = 15;
+        if (text.toLowerCase() !== 'skip') {
+            const num = parseInt(text);
+            if (isNaN(num) || num <= 0) return ctx.reply('❌ Send a positive number or `skip`');
+            clicks = num;
+        }
+        session.data.clicks_per_day = clicks;
+        setTempSession(telegramId, 'block_vpn', session.data);
+        return ctx.replyWithMarkdown("🛡️ *Step 8/8:* Block VPN/Proxy?\n\nChoose:", Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Yes', 'block_vpn_yes')],
+            [Markup.button.callback('❌ No', 'block_vpn_no')]
+        ]));
     }
 });
 
-// Action handlers for campaigns
+async function finishCampaignCreation(ctx, data) {
+    const userId = await getUserIdByTelegram(ctx.from.id);
+    if (!userId) return ctx.reply('Not linked.');
+    await ctx.reply('⏳ Creating campaign...');
+    const campaignId = crypto.randomUUID();
+    let whiteZip = null;
+    let whiteValue = data.white_value;
+    if (data.white_type === 'ai') {
+        whiteZip = await generateMultiFileWhitePage(data.white_value);
+        whiteValue = '';
+    }
+    db.run(`INSERT INTO campaigns (id, user_id, name, offer_url, white_type, white_value, white_zip, allowed_os, allowed_browsers, allowed_countries, clicks_per_day, block_vpn)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [campaignId, userId, data.name, data.offer_url, data.white_type, whiteValue, whiteZip,
+             data.allowed_os || null, data.allowed_browsers || null, data.allowed_countries || null,
+             data.clicks_per_day || 15, data.block_vpn ? 1 : 0], (err) => {
+        if (err) ctx.reply('❌ Error: ' + err.message);
+        else ctx.replyWithMarkdown(`✅ *Campaign Created!*\n\nName: ${data.name}\nID: \`${campaignId}\`\n\nUse /download ${campaignId} to get the cloaking script.`);
+        clearTempSession(ctx.from.id);
+    });
+}
+
+// Action: My Campaigns
 bot.action('list_campaigns', async (ctx) => {
     await ctx.answerCbQuery();
     const userId = await getUserIdByTelegram(ctx.from.id);
-    if (!userId) return ctx.reply('Not linked. Please /start');
+    if (!userId) return ctx.reply('Not linked.');
     db.all(`SELECT id, name, offer_url FROM campaigns WHERE user_id = ?`, [userId], (err, rows) => {
-        if (!rows || rows.length === 0) return ctx.reply('No campaigns found. Create one with /start → New Campaign');
+        if (!rows.length) return ctx.reply('No campaigns. Use "New Campaign".');
         let msg = '📋 *Your Campaigns:*\n';
-        rows.forEach(c => {
-            msg += `\n🔹 *${c.name}*\n   ID: \`${c.id}\`\n   Offer: ${c.offer_url}\n`;
-        });
-        ctx.reply(msg, { parse_mode: 'Markdown' });
+        rows.forEach(c => { msg += `\n🔹 *${c.name}*\n   ID: \`${c.id}\`\n   Offer: ${c.offer_url}\n`; });
+        ctx.replyWithMarkdown(msg);
     });
 });
-bot.action('new_campaign', async (ctx) => {
-    await ctx.answerCbQuery();
-    const userId = await getUserIdByTelegram(ctx.from.id);
-    if (!userId) return ctx.reply('Not linked. Please /start');
-    setTempSession(ctx.from.id, 'new_campaign_name', {});
-    await ctx.reply('Send campaign name:');
-});
+
+// Action: Quick Stats menu
 bot.action('stats_menu', async (ctx) => {
     await ctx.answerCbQuery();
     const userId = await getUserIdByTelegram(ctx.from.id);
-    if (!userId) return ctx.reply('Not linked. Please /start');
+    if (!userId) return ctx.reply('Not linked.');
     db.all(`SELECT id, name FROM campaigns WHERE user_id = ?`, [userId], (err, rows) => {
-        if (!rows || rows.length === 0) return ctx.reply('No campaigns.');
+        if (!rows.length) return ctx.reply('No campaigns.');
         const buttons = rows.map(c => [Markup.button.callback(c.name, `stats_${c.id}`)]);
-        ctx.reply('Select campaign to see stats:', Markup.inlineKeyboard(buttons));
+        ctx.reply('Select campaign for quick stats:', Markup.inlineKeyboard(buttons));
     });
 });
 bot.action(/stats_(.+)/, async (ctx) => {
     const campaignId = ctx.match[1];
     await ctx.answerCbQuery();
+    const userId = await getUserIdByTelegram(ctx.from.id);
+    if (!userId) return ctx.reply('Not linked.');
     db.get(`SELECT COUNT(CASE WHEN decision='main' THEN 1 END) as main, COUNT(CASE WHEN decision='white' THEN 1 END) as white FROM stats WHERE campaign_id = ?`, [campaignId], (err, row) => {
         const main = row?.main || 0;
         const white = row?.white || 0;
-        ctx.reply(`📊 Stats for campaign \`${campaignId}\`:\n✅ Main clicks: ${main}\n❌ White page views: ${white}`, { parse_mode: 'Markdown' });
+        ctx.replyWithMarkdown(`📊 *Quick Stats*\n✅ Main clicks: ${main}\n❌ White views: ${white}`);
     });
 });
+
+// Action: Detailed Stats menu
+bot.action('detailed_stats_menu', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = await getUserIdByTelegram(ctx.from.id);
+    if (!userId) return ctx.reply('Not linked.');
+    db.all(`SELECT id, name FROM campaigns WHERE user_id = ?`, [userId], (err, rows) => {
+        if (!rows.length) return ctx.reply('No campaigns.');
+        const buttons = rows.map(c => [Markup.button.callback(c.name, `dstats_${c.id}`)]);
+        ctx.reply('Select campaign for detailed stats:', Markup.inlineKeyboard(buttons));
+    });
+});
+bot.action(/dstats_(.+)/, async (ctx) => {
+    const campaignId = ctx.match[1];
+    await ctx.answerCbQuery();
+    const userId = await getUserIdByTelegram(ctx.from.id);
+    if (!userId) return ctx.reply('Not linked.');
+    // Fetch detailed stats from API
+    const token = jwt.sign({ id: userId }, process.env.JWT_SECRET || 'default');
+    const response = await axios.get(`${process.env.RENDER_EXTERNAL_URL}/api/campaigns/${campaignId}/detailed_stats`, {
+        headers: { Authorization: `Bearer ${token}` }
+    }).catch(() => null);
+    if (!response || !response.data) return ctx.reply('Error fetching stats.');
+    const stats = response.data;
+    let msg = `📊 *Detailed Stats*\n✅ Main: ${stats.main}\n❌ White: ${stats.white}\n\n*By Country:*\n`;
+    for (let [c, cnt] of Object.entries(stats.by_country)) msg += `${c}: ${cnt}\n`;
+    msg += `\n*By Device:*\n`;
+    for (let [d, cnt] of Object.entries(stats.by_device)) msg += `${d}: ${cnt}\n`;
+    msg += `\n*By OS:*\n`;
+    for (let [os, cnt] of Object.entries(stats.by_os)) msg += `${os}: ${cnt}\n`;
+    msg += `\n*By Browser:*\n`;
+    for (let [b, cnt] of Object.entries(stats.by_browser)) msg += `${b}: ${cnt}\n`;
+    ctx.replyWithMarkdown(msg);
+});
+
+// Action: Download menu
 bot.action('download_menu', async (ctx) => {
     await ctx.answerCbQuery();
     const userId = await getUserIdByTelegram(ctx.from.id);
-    if (!userId) return ctx.reply('Not linked. Please /start');
+    if (!userId) return ctx.reply('Not linked.');
     db.all(`SELECT id, name FROM campaigns WHERE user_id = ?`, [userId], (err, rows) => {
-        if (!rows || rows.length === 0) return ctx.reply('No campaigns.');
+        if (!rows.length) return ctx.reply('No campaigns.');
         const buttons = rows.map(c => [Markup.button.callback(c.name, `download_${c.id}`)]);
-        ctx.reply('Select campaign to download index.php:', Markup.inlineKeyboard(buttons));
+        ctx.reply('Select campaign to download script:', Markup.inlineKeyboard(buttons));
     });
 });
 bot.action(/download_(.+)/, async (ctx) => {
@@ -576,12 +735,12 @@ bot.action(/download_(.+)/, async (ctx) => {
 
 // Webhook setup
 const WEBHOOK_PATH = '/telegram-webhook';
-const WEBHOOK_URL = `${process.env.RENDER_EXTERNAL_URL || process.env.DOMAIN || 'https://yourdomain.com'}${WEBHOOK_PATH}`;
-bot.telegram.setWebhook(WEBHOOK_URL).catch(err => console.error('Webhook error:', err));
+const WEBHOOK_URL = `${process.env.RENDER_EXTERNAL_URL || process.env.DOMAIN}${WEBHOOK_PATH}`;
+bot.telegram.setWebhook(WEBHOOK_URL).catch(e => console.error('Webhook error:', e));
 app.use(bot.webhookCallback(WEBHOOK_PATH));
 
 // ---------- Frontend ----------
-app.get('/', (req, res) => res.send('<h1>Cloaking SaaS API is running</h1><p>Use Telegram bot @' + (process.env.TELEGRAM_BOT_TOKEN?.split(':')[0] || 'your_bot') + '</p>'));
+app.get('/', (req, res) => res.send('<h1>Cloaking SaaS API</h1><p>Bot is running.</p>'));
 
 // ---------- Start Server ----------
 const PORT = process.env.PORT || 3000;
