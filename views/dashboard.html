@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard – Cloaking System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-900 text-white">
+<div class="container mx-auto p-6">
+    <h1 class="text-2xl font-bold">Your Campaigns</h1>
+    <button id="createBtn" class="bg-blue-600 px-4 py-2 rounded mt-4">+ New Campaign</button>
+    <div id="campaigns" class="mt-6 grid gap-4"></div>
+</div>
+<script>
+    const token = localStorage.getItem('token');
+    if (!token) window.location.href = '/login.html';
+    async function loadCampaigns() {
+        const res = await fetch('/api/campaigns', { headers: { Authorization: `Bearer ${token}` } });
+        const campaigns = await res.json();
+        const container = document.getElementById('campaigns');
+        container.innerHTML = '';
+        for (const c of campaigns) {
+            const statsRes = await fetch(`/api/campaigns/${c.id}/stats`, { headers: { Authorization: `Bearer ${token}` } });
+            const stats = await statsRes.json();
+            container.innerHTML += `
+                <div class="bg-gray-800 p-4 rounded">
+                    <h2 class="text-xl">${c.name}</h2>
+                    <p>Offer: ${c.offer_url}</p>
+                    <p>Niche: ${c.white_niche}</p>
+                    <p>Main: ${stats.main} | White: ${stats.white}</p>
+                    <a href="/api/campaigns/${c.id}/download" class="text-blue-400">Download index.php</a>
+                </div>
+            `;
+        }
+    }
+    loadCampaigns();
+</script>
+</body>
+</html>
